@@ -3,27 +3,78 @@ import { useState, useMemo, useCallback } from "react";
 const MAX_REGIONS = 18, MAX_SEARCHES = 14, MAX_SRUS = 12, MAX_OFFSETS = 10;
 const REGION_LETTERS = "ABCDEFGHIJKLMNOPQR".split("");
 
+/* ═══ DARK THEME ═══ remaps the Tailwind palette used in this file when .sm-dark is set */
+const DARK_CSS = `
+.sm-dark { color-scheme: dark; }
+.sm-dark.bg-gray-100, .sm-dark .bg-gray-100 { background-color:#0e1318 !important; }
+.sm-dark .bg-white { background-color:#181f27 !important; }
+.sm-dark .bg-gray-50 { background-color:#1f2731 !important; }
+.sm-dark .bg-gray-200 { background-color:#283038 !important; }
+.sm-dark .bg-gray-300 { background-color:#323c47 !important; }
+.sm-dark .bg-gray-700 { background-color:#0a0e13 !important; }
+.sm-dark .bg-gray-800 { background-color:#05080c !important; }
+.sm-dark .text-gray-900 { color:#e7ecf2 !important; }
+.sm-dark .text-gray-700 { color:#cdd5df !important; }
+.sm-dark .text-gray-600 { color:#a9b3bf !important; }
+.sm-dark .text-gray-500 { color:#8a94a1 !important; }
+.sm-dark .text-gray-400 { color:#6c7682 !important; }
+.sm-dark .bg-blue-50 { background-color:#142539 !important; }
+.sm-dark .bg-green-50 { background-color:#102d1d !important; }
+.sm-dark .bg-emerald-50 { background-color:#0e2d27 !important; }
+.sm-dark .bg-emerald-100 { background-color:#143b35 !important; }
+.sm-dark .bg-emerald-200 { background-color:#1b4d44 !important; }
+.sm-dark .bg-emerald-300 { background-color:#1f5e52 !important; }
+.sm-dark .bg-amber-50 { background-color:#352a10 !important; }
+.sm-dark .bg-indigo-50 { background-color:#1b1e42 !important; }
+.sm-dark .bg-purple-50 { background-color:#271a3a !important; }
+.sm-dark .bg-yellow-50 { background-color:#352f10 !important; }
+.sm-dark .text-blue-700 { color:#7fb4f2 !important; }
+.sm-dark .text-green-700, .sm-dark .text-green-800 { color:#5fd08a !important; }
+.sm-dark .text-emerald-700 { color:#55d8ad !important; }
+.sm-dark .text-emerald-800 { color:#74e2bb !important; }
+.sm-dark .text-emerald-900 { color:#9feccd !important; }
+.sm-dark .text-amber-800 { color:#e3b765 !important; }
+.sm-dark .text-indigo-700 { color:#9ca2f2 !important; }
+.sm-dark .text-purple-700 { color:#c490e2 !important; }
+.sm-dark .text-red-600 { color:#f08a8a !important; }
+.sm-dark .text-red-300 { color:#f0a8a8 !important; }
+.sm-dark .border, .sm-dark .border-b, .sm-dark .border-r, .sm-dark .border-collapse td, .sm-dark .border-collapse th { border-color:#2a333d !important; }
+.sm-dark .border-gray-300 { border-color:#384350 !important; }
+.sm-dark input { background-color:#1f2731 !important; color:#e7ecf2 !important; }
+.sm-dark input::placeholder { color:#6c7682 !important; }
+.sm-dark .bg-amber-50.border-amber-400, .sm-dark input.border-amber-400 { background-color:#352a10 !important; border-color:#b9892f !important; }
+.sm-dark .bg-yellow-50.border-yellow-300, .sm-dark input.border-yellow-300, .sm-dark input.border-yellow-400 { background-color:#352f10 !important; border-color:#b9a52f !important; }
+`;
+
 /* ═══ DATA FACTORIES ═══ */
 const mkRegion = (letter) => ({ letter, poc: 0, area: 0, numSegments: 1 });
 const mkGndSeg = (reg, num) => ({
   id: `${reg}${String(num).padStart(2,"0")}`, region: reg, segNum: num,
-  length: 0, baseline: 0, area: 0, sweepWidth: 0, searchSpeed: 0,
+  length: 0, baseline: 0, areaOverride: null, sweepWidth: 0, searchSpeed: 0,
   timeOverride: null, // null = use calculated minimum; number = user override
 });
 const mkEval = (name="") => ({ name, ratings: {} });
-const mkSRU = (id="") => ({ id, sweepWidth:0, fuelEndurance:0, daylightEndurance:0, observerEndurance:0, craftSpeed:0 });
-const mkAirRegion = (letter="A") => ({ letter, trackStartPct: 0, trackEndPct: 0 });
+const mkSRU = (id="", region="A") => ({ id, region, sweepWidth:0, fuelEndurance:0, daylightEndurance:0, observerEndurance:0, craftSpeed:0 });
 const mkOffset = (val=0) => ({ offset: val });
-const mkAirSetup = () => ({ flightLength:0, searchAreaLength:0,
-  airRegions: Array.from({length:3},(_,i)=>mkAirRegion(REGION_LETTERS[i])),
-  srus: Array.from({length:4},(_,i)=>mkSRU(`SRU-${i+1}`)),
-  offsets:[mkOffset(2),mkOffset(4),mkOffset(5),mkOffset(6),mkOffset(8),mkOffset(10)] });
+// A sub-area (Section A column). pAlongTrack feeds Section C POC; from ASAD chart or Section D's D23.
+const mkSubArea = (letter="A") => ({ letter, flightLength:0, searchAreaLength:0, pAlongTrack:0.989, selectedOffsetIdx:null });
+// Section D POC calculator — all inputs in MILES from the LKP
+const mkDSeg = () => ({ startPoint: 0, endPoint: 0, leftOffset: 0, rightOffset: 0, oppositeSides: true });
+const mkAirSetup = () => ({
+  subAreas: [mkSubArea("A")],
+  srus: [mkSRU("SRU-1","A")],
+  offsets: [mkOffset(2),mkOffset(4),mkOffset(5),mkOffset(6),mkOffset(8),mkOffset(10)],
+  useD: false,            // auto-opens when a 2nd sub-area is added
+  dSeg: mkDSeg(),
+});
 
 /* ═══ GROUND CALCS — matches Student Guide Rev 07/15 ═══ */
 function calcGndSeg(seg, regions) {
   const r = regions.find(r => r.letter === seg.region);
+  // A7: Segment Area = L×B (rectangular estimate), or user override for non-square areas
+  const area = (seg.areaOverride != null && seg.areaOverride > 0) ? seg.areaOverride : seg.length * seg.baseline;
   // A8: Segment POC = (A7 ÷ A2) × A3
-  const poc = r && r.area > 0 ? (seg.area / r.area) * r.poc : 0;
+  const poc = r && r.area > 0 ? (area / r.area) * r.poc : 0;
   // A11: Time to Search = A5÷A10, or max desired search time (user override)
   const minTime = seg.searchSpeed > 0 ? seg.length / seg.searchSpeed : 0;
   const timeToSearch = seg.timeOverride !== null && seg.timeOverride > 0 ? seg.timeOverride : minTime;
@@ -34,8 +85,8 @@ function calcGndSeg(seg, regions) {
   const timeInSeg = seg.searchSpeed > 0 && seg.length > 0
     ? (teamTracks / seg.searchSpeed) * seg.length : 0;
   // A12: PSR = [(A10 × A9 × A8) ÷ A7] — NO time component, it's a RATE
-  const psr = seg.area > 0 ? (seg.searchSpeed * seg.sweepWidth * poc) / seg.area : 0;
-  return { poc, minTime, timeToSearch, teamTracks, timeInSeg, psr };
+  const psr = area > 0 ? (seg.searchSpeed * seg.sweepWidth * poc) / area : 0;
+  return { area, poc, minTime, timeToSearch, teamTracks, timeInSeg, psr };
 }
 
 function calcGndSearch(seg, regions, assigned) {
@@ -51,7 +102,7 @@ function calcGndSearch(seg, regions, assigned) {
   // B18: POC Remaining = A8 − B17
   const pocRem = Math.max(0, c.poc - pos);
   // B19: PSR After = [(A10 × A9 × B18) ÷ A7] — NO time component
-  const psrAfter = seg.area > 0 ? (seg.searchSpeed * seg.sweepWidth * pocRem) / seg.area : 0;
+  const psrAfter = c.area > 0 ? (seg.searchSpeed * seg.sweepWidth * pocRem) / c.area : 0;
   return { ...c, sp, cov, pod, pos, pocRem, psrAfter };
 }
 
@@ -104,50 +155,65 @@ function calcSRU(sru) {
   return { searchEndurance, mileage };
 }
 function calcAirSearch(setup) {
-  const sruCalcs = setup.srus.map(s => ({ ...s, ...calcSRU(s) }));
-  const totalMileage = sruCalcs.reduce((a, s) => a + s.mileage, 0);
-  const sruDerived = sruCalcs.map(s => {
-    const trackPortion = totalMileage > 0 ? s.mileage / totalMileage : 0;
-    const segLength = trackPortion * setup.flightLength;
-    const numTracks = segLength > 0 ? s.mileage / segLength : 0;
-    const fullTracks = Math.floor(numTracks);
-    return { ...s, trackPortion, segLength, numTracks, fullTracks };
+  const sruBase = setup.srus.map(s => ({ ...s, ...calcSRU(s) })); // B6 searchEndurance, B8 mileage
+
+  // ── Section D (optional, shared calculator) ──
+  const d = setup.dSeg || mkDSeg();
+  // % along total track is based on the sub-area's own flight length entered in D's owning sub-area;
+  // here we use sub-area A's flight length as the reference total track for the D scratch calc.
+  const refFlight = (setup.subAreas[0]?.flightLength) || 0;
+  const dStartPct = refFlight > 0 ? (d.startPoint / refFlight) * 100 : 0;       // D21a
+  const dEndPct   = refFlight > 0 ? (d.endPoint   / refFlight) * 100 : 0;       // D22a
+  const dStartProb = d.startPoint <= 0 ? 0 : asadLookup(ASAD_TRACK, dStartPct); // D21b (LKP rule)
+  const dInclDest = refFlight > 0 && d.endPoint >= refFlight;
+  const dEndProb = dInclDest ? asadLookup(ASAD_TRACK, 110) : asadLookup(ASAD_TRACK, dEndPct); // D22b
+  const dAlong = Math.max(0, dEndProb - dStartProb);                            // D23
+  const dLB = asadLookup(ASAD_OFFSET, d.leftOffset)  / 2;                       // D24a
+  const dRB = asadLookup(ASAD_OFFSET, d.rightOffset) / 2;                       // D25a
+  const dOffset = d.oppositeSides ? (dRB + dLB) : Math.abs(dRB - dLB);          // D26
+  const dPOC = dAlong * dOffset;                                                // D27
+  const dCalc = { dStartPct, dEndPct, dStartProb, dEndProb, dAlong, dLB, dRB, dOffset, dPOC, refFlight };
+
+  // ── Section B chain, computed per SRU using its assigned sub-area ──
+  const b9ByRegion = {}, a2ByRegion = {};
+  setup.subAreas.forEach(sa => {
+    b9ByRegion[sa.letter] = sruBase.filter(s=>s.region===sa.letter).reduce((a,s)=>a+s.mileage,0);
+    a2ByRegion[sa.letter] = sa.searchAreaLength;
   });
-  const activeSRUs = sruDerived.filter(s => s.fullTracks > 0);
-  const avgFullTracks = activeSRUs.length > 0 ? activeSRUs.reduce((a,s)=>a+s.fullTracks,0) / activeSRUs.length : 0;
-  const avgSweepWidth = activeSRUs.length > 0 ? activeSRUs.reduce((a,s)=>a+s.sweepWidth,0) / activeSRUs.length : 0;
-
-  // D section: per-region ASAD-based probability calculations
-  const regionCalcs = (setup.airRegions || []).map(r => {
-    // D23: Prob Along Track = ASAD_TRACK(endPct) - ASAD_TRACK(startPct)
-    const ptEnd = asadLookup(ASAD_TRACK, r.trackEndPct);
-    const ptStart = asadLookup(ASAD_TRACK, r.trackStartPct);
-    const probAlongTrack = Math.max(0, ptEnd - ptStart);
-    return { ...r, probAlongTrack, ptEnd, ptStart };
+  const sruFlat = sruBase.map(s => {
+    const b9 = b9ByRegion[s.region] || 0;                          // B9 (within sub-area)
+    const trackPortion = b9 > 0 ? s.mileage / b9 : 0;              // B10
+    const segLength = trackPortion * (a2ByRegion[s.region] || 0);  // B11 = B10 × A2
+    const numTracks = segLength > 0 ? s.mileage / segLength : 0;   // B12
+    const fullTracks = Math.round(numTracks);                      // B13
+    return { ...s, b9, trackPortion, segLength, numTracks, fullTracks };
   });
 
-  // C section: For each offset, compute POC from ASAD tables via D
-  const offsetCalcs = setup.offsets.map(o => {
-    const segWidth = 2 * o.offset;
-    const trackSpacing = avgFullTracks > 0 ? segWidth / avgFullTracks : 0;
-    const coverage = trackSpacing > 0 ? avgSweepWidth / trackSpacing : 0;
-    const pod = coverage > 0 ? 1 - Math.exp(-coverage) : 0;
-
-    // P_offset from ASAD table (symmetric: equal distance both sides)
-    const pOffset = asadLookup(ASAD_OFFSET, o.offset);
-
-    // POC = sum over regions of (P_along_track × P_offset)
-    // For symmetric search, P_offset is the full table value
-    // For asymmetric (D section), each border is looked up ÷ 2 then combined
-    let poc = 0;
-    regionCalcs.forEach(r => {
-      poc += r.probAlongTrack * pOffset;
+  // ── Per sub-area: Section C comparison ──
+  const subCalcs = setup.subAreas.map(sa => {
+    const mine = sruFlat.filter(s => s.region === sa.letter);
+    const active = mine.filter(s => s.fullTracks > 0);
+    const avgFullTracks = active.length ? active.reduce((a,s)=>a+s.fullTracks,0)/active.length : 0;
+    const avgSweepWidth = active.length ? active.reduce((a,s)=>a+s.sweepWidth,0)/active.length : 0;
+    const offsetCalcs = setup.offsets.map(o => {
+      const segWidth = 2 * o.offset;                                       // C15
+      const trackSpacing = avgFullTracks > 0 ? segWidth / avgFullTracks : 0; // C16
+      const coverage = trackSpacing > 0 ? avgSweepWidth / trackSpacing : 0;  // C17
+      const pod = coverage > 0 ? 1 - Math.exp(-coverage) : 0;                // C18
+      const pOffset = asadLookup(ASAD_OFFSET, o.offset);                     // P_offset
+      const poc = sa.pAlongTrack * pOffset;                                  // C19 = P_T × P_offset
+      const pos = pod * poc;                                                 // C20
+      return { ...o, segWidth, trackSpacing, coverage, pod, pOffset, poc, pos };
     });
-
-    const pos = pod * poc;
-    return { ...o, segWidth, trackSpacing, coverage, pod, pOffset, poc, pos };
+    const bestPOS = offsetCalcs.reduce((b,o)=>o.pos>b?o.pos:b,0);
+    const idx = (sa.selectedOffsetIdx != null && offsetCalcs[sa.selectedOffsetIdx]) ? sa.selectedOffsetIdx : null;
+    const chosenPOS = idx != null ? offsetCalcs[idx].pos : 0;
+    return { letter: sa.letter, srus: mine, avgFullTracks, avgSweepWidth, offsetCalcs, bestPOS, chosenIdx: idx, chosenPOS };
   });
-  return { sruDerived, totalMileage, regionCalcs, offsetCalcs };
+
+  const totalMileage = sruBase.reduce((a,s)=>a+s.mileage,0);
+  const totalPOS = subCalcs.reduce((a,sc)=>a+sc.chosenPOS,0);
+  return { sruBase, sruFlat, subCalcs, totalMileage, totalPOS, dCalc };
 }
 
 /* ═══ SHARED COMPONENTS ═══ */
@@ -271,9 +337,15 @@ function GndSegTable({ segments, regions, onUpdateSeg, searchAssign, onUpdateAss
         {/* A6: Baseline */}
         <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">6. Baseline (mi)</td>
           {segments.map((s,i)=><td key={i} className="px-0.5 py-0.5"><In value={s.baseline} onChange={v=>u(i,"baseline",v)} step="0.01" className="text-[10px]"/></td>)}</tr>
-        {/* A7: Area */}
-        <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">7. Area (mi²)</td>
-          {segments.map((s,i)=><td key={i} className="px-0.5 py-0.5"><In value={s.area} onChange={v=>u(i,"area",v)} step="0.01" className="text-[10px]"/></td>)}</tr>
+        {/* A7: Area — computed L×B, overridable for non-rectangular segments */}
+        <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">7. Area (mi²) <span className="font-normal text-[9px]">A5×A6 or override</span></td>
+          {segments.map((s,i)=>{
+            const computed = (s.length||0)*(s.baseline||0);
+            const overridden = s.areaOverride != null && s.areaOverride > 0;
+            return <td key={i} className="px-0.5 py-0.5"><In value={overridden ? s.areaOverride : computed}
+              onChange={v=>u(i,"areaOverride", v>0 && Math.abs(v-computed)>1e-9 ? v : null)} step="0.01"
+              className={`text-[10px] ${overridden?"bg-amber-50 border-amber-400":""}`}/></td>;
+          })}</tr>
         {/* A8: POC (calculated) */}
         <tr className="border-b bg-blue-50"><td className="px-2 py-0.5 font-semibold text-blue-700 bg-blue-50 sticky left-0 z-10 border-r">8. Seg POC <span className="font-normal text-[9px]">(A7÷A2)×A3</span></td>
           {calcs.map((c,i)=><td key={i}><Cv value={c.poc} className="text-blue-700 font-semibold"/></td>)}</tr>
@@ -332,130 +404,188 @@ function GndSegTable({ segments, regions, onUpdateSeg, searchAssign, onUpdateAss
   );
 }
 
-/* ═══ AIR SRU TABLE with Regions + D Section ═══ */
+/* ═══ AIR ASAD WORKSHEET — Sections A, B, C, and optional D ═══ */
 function AirSRUTable({ setup, onUpdate }) {
   const res = useMemo(()=>calcAirSearch(setup),[setup]);
   const uSRU=(i,f,v)=>{const s={...setup,srus:[...setup.srus]};s.srus[i]={...s.srus[i],[f]:v};onUpdate(s);};
   const uOff=(i,f,v)=>{const s={...setup,offsets:[...setup.offsets]};s.offsets[i]={...s.offsets[i],[f]:v};onUpdate(s);};
-  const uReg=(i,f,v)=>{const s={...setup,airRegions:[...setup.airRegions]};s.airRegions[i]={...s.airRegions[i],[f]:v};onUpdate(s);};
-  const addReg=()=>(setup.airRegions||[]).length<MAX_REGIONS&&onUpdate({...setup,airRegions:[...(setup.airRegions||[]),mkAirRegion(REGION_LETTERS[(setup.airRegions||[]).length])]});
-  const rmReg=()=>(setup.airRegions||[]).length>1&&onUpdate({...setup,airRegions:setup.airRegions.slice(0,-1)});
-  const bestPOS = res.offsetCalcs.reduce((b,o)=>o.pos>b?o.pos:b,0);
+  const uSA=(i,f,v)=>{const s={...setup,subAreas:[...setup.subAreas]};s.subAreas[i]={...s.subAreas[i],[f]:v};onUpdate(s);};
+  const uD=(f,v)=>onUpdate({...setup,dSeg:{...(setup.dSeg||mkDSeg()),[f]:v}});
+  const d = res.dCalc;
+  const multi = setup.subAreas.length > 1;
+  const letters = setup.subAreas.map(sa=>sa.letter);
+
+  const addSubArea=()=>{
+    if(setup.subAreas.length>=MAX_REGIONS) return;
+    const letter = REGION_LETTERS[setup.subAreas.length];
+    onUpdate({...setup, subAreas:[...setup.subAreas, mkSubArea(letter)], useD:true}); // adding a sub-area opens D
+  };
+  const rmSubArea=()=>{
+    if(setup.subAreas.length<=1) return;
+    const dropped = setup.subAreas[setup.subAreas.length-1].letter;
+    onUpdate({...setup,
+      subAreas:setup.subAreas.slice(0,-1),
+      srus:setup.srus.map(s=>s.region===dropped?{...s,region:setup.subAreas[0].letter}:s)});
+  };
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Area params */}
-      <div className="flex items-center gap-4 text-xs flex-wrap">
-        <label className="flex items-center gap-1"><span className="font-semibold text-gray-600">Flight Length (nm):</span>
-          <In value={setup.flightLength} onChange={v=>onUpdate({...setup,flightLength:v})} step="1" className="w-20"/></label>
-        <label className="flex items-center gap-1"><span className="font-semibold text-gray-600">Search Area Length (nm):</span>
-          <In value={setup.searchAreaLength} onChange={v=>onUpdate({...setup,searchAreaLength:v})} step="1" className="w-20"/></label>
-        <div className="ml-4 px-2 py-1 bg-gray-800 text-white rounded text-xs">
-          Total Mileage: <span className="font-mono font-bold">{res.totalMileage.toFixed(1)} nm</span></div>
-      </div>
-
-      <div className="flex gap-3">
-        {/* A/D: Regions Panel */}
-        <div className="shrink-0" style={{minWidth:320}}>
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-xs font-bold text-gray-700">A/D — REGIONS & TRACK PROBABILITY</span>
-            <div className="flex gap-1">
-              <button onClick={addReg} className="text-[10px] px-1.5 py-0.5 bg-green-600 text-white rounded">+</button>
-              <button onClick={rmReg} className="text-[10px] px-1.5 py-0.5 bg-red-600 text-white rounded">−</button>
-            </div>
-          </div>
-          <div className="border rounded overflow-hidden">
-            <table className="text-xs border-collapse w-full"><thead><tr className="bg-gray-700 text-white">
-              <th className="px-1 py-0.5">Rgn</th>
-              <th className="px-1 py-0.5">Trk Start %</th>
-              <th className="px-1 py-0.5">Trk End %</th>
-              <th className="px-1 py-0.5 bg-green-800">D23: P Along</th>
-            </tr></thead><tbody>{(setup.airRegions||[]).map((r,i)=>(
-              <tr key={i} className={i%2?"bg-gray-50":"bg-white"}>
-                <td className="px-1 py-0.5 font-bold text-gray-600 text-center">{r.letter}</td>
-                <td className="px-0.5"><In value={r.trackStartPct} onChange={v=>uReg(i,"trackStartPct",v)} step="1" className="w-14"/></td>
-                <td className="px-0.5"><In value={r.trackEndPct} onChange={v=>uReg(i,"trackEndPct",v)} step="1" className="w-14"/></td>
-                <td className="px-1 py-0.5"><Cv value={res.regionCalcs[i]?.probAlongTrack} className="text-green-700 font-semibold bg-green-50"/></td>
-              </tr>))}</tbody>
-              <tfoot><tr className="bg-gray-200 font-bold text-xs">
-                <td></td>
-                <td colSpan={2}></td>
-                <td className="text-center">{res.regionCalcs.reduce((a,r)=>a+r.probAlongTrack,0).toFixed(3)}</td>
-              </tr></tfoot>
-            </table>
-          </div>
-          <div className="mt-1 text-[10px] text-gray-400">
-            D23: P_along = ASAD_TRACK(end%) − ASAD_TRACK(start%) | POC = P_along × P_offset (from ASAD tables)
-          </div>
-        </div>
-
-        {/* B: SRU Setup */}
-        <div className="flex-1 overflow-x-auto">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-xs font-bold text-gray-700">B — SRU EFFORT & SEARCH SET-UP</span>
-            <div className="flex gap-1">
-              <button onClick={()=>setup.srus.length<MAX_SRUS&&onUpdate({...setup,srus:[...setup.srus,mkSRU(`SRU-${setup.srus.length+1}`)]})} className="text-[10px] px-1.5 py-0.5 bg-green-600 text-white rounded">+ SRU</button>
-              <button onClick={()=>setup.srus.length>1&&onUpdate({...setup,srus:setup.srus.slice(0,-1)})} className="text-[10px] px-1.5 py-0.5 bg-red-600 text-white rounded">− SRU</button>
-            </div>
-          </div>
-          <div className="border rounded"><table className="text-xs border-collapse"><tbody>
-            <tr className="bg-gray-200"><td className="px-2 py-0.5 font-bold sticky left-0 bg-gray-200 z-10 border-r min-w-[150px]">3. SRU Designation</td>
-              {setup.srus.map((s,i)=><td key={i} className="px-0.5 py-0.5 min-w-[75px]"><In value={s.id} type="text" onChange={v=>uSRU(i,"id",v)} className="text-[10px] font-bold"/></td>)}</tr>
-            <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">4. Sweep Width (nm)</td>
-              {setup.srus.map((s,i)=><td key={i} className="px-0.5 py-0.5"><In value={s.sweepWidth} onChange={v=>uSRU(i,"sweepWidth",v)} step="0.01" className="text-[10px]"/></td>)}</tr>
-            <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">5a. Fuel Endurance (hr)</td>
-              {setup.srus.map((s,i)=><td key={i} className="px-0.5 py-0.5"><In value={s.fuelEndurance} onChange={v=>uSRU(i,"fuelEndurance",v)} step="0.1" className="text-[10px]"/></td>)}</tr>
-            <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">5b. Daylight Endurance (hr)</td>
-              {setup.srus.map((s,i)=><td key={i} className="px-0.5 py-0.5"><In value={s.daylightEndurance} onChange={v=>uSRU(i,"daylightEndurance",v)} step="0.1" className="text-[10px]"/></td>)}</tr>
-            <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">5c. Observer Endurance (hr)</td>
-              {setup.srus.map((s,i)=><td key={i} className="px-0.5 py-0.5"><In value={s.observerEndurance} onChange={v=>uSRU(i,"observerEndurance",v)} step="0.1" className="text-[10px]"/></td>)}</tr>
-            <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">6. Search Endurance (hr)</td>
-              {res.sruDerived.map((s,i)=><td key={i}><Cv value={s.searchEndurance} fmt="dec2" className="text-green-700 font-semibold"/></td>)}</tr>
-            <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">7. Craft Speed (kts)</td>
-              {setup.srus.map((s,i)=><td key={i} className="px-0.5 py-0.5"><In value={s.craftSpeed} onChange={v=>uSRU(i,"craftSpeed",v)} step="1" className="text-[10px]"/></td>)}</tr>
-            <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">8. SRU Mileage (nm)</td>
-              {res.sruDerived.map((s,i)=><td key={i}><Cv value={s.mileage} fmt="dec1" className="text-green-700 font-bold"/></td>)}</tr>
-            <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">10. Track Portion</td>
-              {res.sruDerived.map((s,i)=><td key={i}><Cv value={s.trackPortion} className="text-green-700"/></td>)}</tr>
-            <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">11. Segment Length (nm)</td>
-              {res.sruDerived.map((s,i)=><td key={i}><Cv value={s.segLength} fmt="dec1" className="text-green-700"/></td>)}</tr>
-            <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">12. Number of Tracks</td>
-              {res.sruDerived.map((s,i)=><td key={i}><Cv value={s.numTracks} fmt="dec2" className="text-green-700"/></td>)}</tr>
-            <tr className="border-b bg-amber-50"><td className="px-2 py-0.5 font-bold text-amber-800 bg-amber-50 sticky left-0 z-10 border-r">13. Full Tracks</td>
-              {res.sruDerived.map((s,i)=><td key={i}><Cv value={s.fullTracks} fmt="int" className="text-amber-800 font-bold"/></td>)}</tr>
-          </tbody></table></div>
-        </div>
-      </div>
-
-      {/* Section C: POS Comparisons — POC now auto-calculated from D */}
+      {/* ── Section A — Search Area & Sub-Areas ── */}
       <div>
         <div className="flex items-center justify-between mb-1">
-          <span className="text-xs font-bold text-gray-700">C — POS COMPARISONS BY OFFSET <span className="font-normal text-gray-400">(POC from regions via D)</span></span>
+          <span className="text-xs font-bold text-gray-700">A — SEARCH AREA & SUB-AREAS <span className="font-normal text-gray-400">(1 column per sub-area)</span></span>
+          <div className="flex gap-1">
+            <button onClick={addSubArea} className="text-[10px] px-1.5 py-0.5 bg-green-600 text-white rounded">+ Sub-Area</button>
+            <button onClick={rmSubArea} className="text-[10px] px-1.5 py-0.5 bg-red-600 text-white rounded">− Sub-Area</button>
+          </div>
+        </div>
+        <div className="border rounded overflow-x-auto"><table className="text-xs border-collapse"><tbody>
+          <tr className="bg-gray-200"><td className="px-2 py-0.5 font-bold sticky left-0 bg-gray-200 z-10 border-r min-w-[200px]">Sub-Area</td>
+            {setup.subAreas.map((sa,i)=><td key={i} className="px-1 py-0.5 text-center font-bold min-w-[80px]">{sa.letter}</td>)}</tr>
+          <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">1. Length of Flight (nm)</td>
+            {setup.subAreas.map((sa,i)=><td key={i} className="px-0.5 py-0.5"><In value={sa.flightLength} onChange={v=>uSA(i,"flightLength",v)} step="1" className="text-[10px]"/></td>)}</tr>
+          <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">2. Length of Search Area (nm)
+            <button onClick={()=>setup.subAreas.forEach((sa,i)=>uSA(i,"searchAreaLength",(sa.flightLength||0)+20))} className="ml-1 text-[9px] px-1 bg-gray-500 text-white rounded" title="flight + 20 nm">+20</button></td>
+            {setup.subAreas.map((sa,i)=><td key={i} className="px-0.5 py-0.5"><In value={sa.searchAreaLength} onChange={v=>uSA(i,"searchAreaLength",v)} step="1" className="text-[10px]"/></td>)}</tr>
+        </tbody></table></div>
+        {!multi && <div className="mt-1 text-[10px] text-gray-400">One sub-area = whole-route search. Add a sub-area to segment the search (jurisdiction, terrain, sweep-width changes); that opens Section D for per-segment POC.</div>}
+        <div className="mt-1 px-2 py-0.5 bg-gray-800 text-white rounded text-xs inline-block">Total SRU Mileage: <span className="font-mono font-bold">{res.totalMileage.toFixed(1)} nm</span></div>
+      </div>
+
+      {/* ── Section B ── */}
+      <div className="overflow-x-auto">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-xs font-bold text-gray-700">B — EFFORT & SEARCH SET-UP <span className="font-normal text-gray-400">(1 column per SRU)</span></span>
+          <div className="flex gap-1">
+            <button onClick={()=>setup.srus.length<MAX_SRUS&&onUpdate({...setup,srus:[...setup.srus,mkSRU(`SRU-${setup.srus.length+1}`,setup.subAreas[0].letter)]})} className="text-[10px] px-1.5 py-0.5 bg-green-600 text-white rounded">+ SRU</button>
+            <button onClick={()=>setup.srus.length>1&&onUpdate({...setup,srus:setup.srus.slice(0,-1)})} className="text-[10px] px-1.5 py-0.5 bg-red-600 text-white rounded">− SRU</button>
+          </div>
+        </div>
+        <div className="border rounded"><table className="text-xs border-collapse"><tbody>
+          <tr className="bg-gray-200"><td className="px-2 py-0.5 font-bold sticky left-0 bg-gray-200 z-10 border-r min-w-[200px]">3. SRU Designation</td>
+            {setup.srus.map((s,i)=><td key={i} className="px-0.5 py-0.5 min-w-[80px]"><In value={s.id} type="text" onChange={v=>uSRU(i,"id",v)} className="text-[10px] font-bold"/></td>)}</tr>
+          {multi && <tr className="border-b bg-blue-50"><td className="px-2 py-0.5 font-semibold text-blue-700 bg-blue-50 sticky left-0 z-10 border-r">3a. Region</td>
+            {setup.srus.map((s,i)=><td key={i} className="px-0.5 py-0.5 text-center">
+              <select value={s.region} onChange={e=>uSRU(i,"region",e.target.value)} className="text-[10px] border border-gray-300 rounded bg-white px-0.5 py-0.5">
+                {letters.map(l=><option key={l} value={l}>{l}</option>)}
+              </select></td>)}</tr>}
+          <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">4. Sweep Width — corrected (nm)</td>
+            {setup.srus.map((s,i)=><td key={i} className="px-0.5 py-0.5"><In value={s.sweepWidth} onChange={v=>uSRU(i,"sweepWidth",v)} step="0.01" className="text-[10px]"/></td>)}</tr>
+          <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">5a. Endurance — Fuel (hr)</td>
+            {setup.srus.map((s,i)=><td key={i} className="px-0.5 py-0.5"><In value={s.fuelEndurance} onChange={v=>uSRU(i,"fuelEndurance",v)} step="0.1" className="text-[10px]"/></td>)}</tr>
+          <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">5b. Endurance — Daylight/Wx (hr)</td>
+            {setup.srus.map((s,i)=><td key={i} className="px-0.5 py-0.5"><In value={s.daylightEndurance} onChange={v=>uSRU(i,"daylightEndurance",v)} step="0.1" className="text-[10px]"/></td>)}</tr>
+          <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">5c. Endurance — Observer (hr)</td>
+            {setup.srus.map((s,i)=><td key={i} className="px-0.5 py-0.5"><In value={s.observerEndurance} onChange={v=>uSRU(i,"observerEndurance",v)} step="0.1" className="text-[10px]"/></td>)}</tr>
+          <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">6. Search Endurance <span className="font-normal text-[9px]">least of 5a/b/c</span></td>
+            {res.sruFlat.map((s,i)=><td key={i}><Cv value={s.searchEndurance} fmt="dec1" className="text-green-700 font-semibold"/></td>)}</tr>
+          <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">7. Search Craft Speed (kts)</td>
+            {setup.srus.map((s,i)=><td key={i} className="px-0.5 py-0.5"><In value={s.craftSpeed} onChange={v=>uSRU(i,"craftSpeed",v)} step="1" className="text-[10px]"/></td>)}</tr>
+          <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">8. SRU Mileage <span className="font-normal text-[9px]">B6×B7</span></td>
+            {res.sruFlat.map((s,i)=><td key={i}><Cv value={s.mileage} fmt="dec1" className="text-green-700 font-bold"/></td>)}</tr>
+          <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">9. Total Mileage in Sub-Area <span className="font-normal text-[9px]">Σ B8 in region</span></td>
+            {res.sruFlat.map((s,i)=><td key={i}><Cv value={s.b9} fmt="dec1" className="text-green-700"/></td>)}</tr>
+          <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">10. Track Portion <span className="font-normal text-[9px]">B8÷B9</span></td>
+            {res.sruFlat.map((s,i)=><td key={i}><Cv value={s.trackPortion} className="text-green-700"/></td>)}</tr>
+          <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">11. Segment Length (nm) <span className="font-normal text-[9px]">B10×A2</span></td>
+            {res.sruFlat.map((s,i)=><td key={i}><Cv value={s.segLength} fmt="dec1" className="text-green-700"/></td>)}</tr>
+          <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">12. Number of Tracks <span className="font-normal text-[9px]">B8÷B11</span></td>
+            {res.sruFlat.map((s,i)=><td key={i}><Cv value={s.numTracks} fmt="dec2" className="text-green-700"/></td>)}</tr>
+          <tr className="border-b bg-amber-50"><td className="px-2 py-0.5 font-bold text-amber-800 bg-amber-50 sticky left-0 z-10 border-r">13. Full Tracks <span className="font-normal text-[9px]">round B12</span></td>
+            {res.sruFlat.map((s,i)=><td key={i}><Cv value={s.fullTracks} fmt="int" className="text-amber-800 font-bold"/></td>)}</tr>
+        </tbody></table></div>
+      </div>
+
+      {/* ── Section C — one POS comparison per sub-area ── */}
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-xs font-bold text-gray-700">C — POS COMPARISONS <span className="font-normal text-gray-400">(click a POS cell to select the offset for each sub-area)</span></span>
           <div className="flex gap-1">
             <button onClick={()=>setup.offsets.length<MAX_OFFSETS&&onUpdate({...setup,offsets:[...setup.offsets,mkOffset(0)]})} className="text-[10px] px-1.5 py-0.5 bg-green-600 text-white rounded">+ Offset</button>
             <button onClick={()=>setup.offsets.length>1&&onUpdate({...setup,offsets:setup.offsets.slice(0,-1)})} className="text-[10px] px-1.5 py-0.5 bg-red-600 text-white rounded">− Offset</button>
           </div>
         </div>
-        <div className="overflow-x-auto border rounded"><table className="text-xs border-collapse"><tbody>
-          <tr className="bg-gray-200"><td className="px-2 py-0.5 font-bold sticky left-0 bg-gray-200 z-10 border-r min-w-[150px]">14. Offset (nm)</td>
-            {setup.offsets.map((o,i)=><td key={i} className="px-0.5 py-0.5 min-w-[70px]"><In value={o.offset} onChange={v=>uOff(i,"offset",v)} step="0.5" className="text-[10px]"/></td>)}</tr>
-          <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">15. Seg Width (nm)</td>
-            {res.offsetCalcs.map((o,i)=><td key={i}><Cv value={o.segWidth} fmt="dec1" className="text-green-700"/></td>)}</tr>
-          <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">16. Track Spacing (nm)</td>
-            {res.offsetCalcs.map((o,i)=><td key={i}><Cv value={o.trackSpacing} fmt="dec2" className="text-green-700"/></td>)}</tr>
-          <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">17. Coverage (W/S)</td>
-            {res.offsetCalcs.map((o,i)=><td key={i}><Cv value={o.coverage} fmt="dec2" className="text-green-700"/></td>)}</tr>
-          <tr className="border-b bg-blue-50"><td className="px-2 py-0.5 font-semibold text-blue-700 bg-blue-50 sticky left-0 z-10 border-r">18. POD</td>
-            {res.offsetCalcs.map((o,i)=><td key={i}><Cv value={o.pod} className="text-blue-700 font-semibold"/></td>)}</tr>
-          <tr className="border-b bg-indigo-50"><td className="px-2 py-0.5 font-semibold text-indigo-700 bg-indigo-50 sticky left-0 z-10 border-r">P_offset <span className="font-normal text-[9px]">(ASAD table)</span></td>
-            {res.offsetCalcs.map((o,i)=><td key={i}><Cv value={o.pOffset} className="text-indigo-700"/></td>)}</tr>
-          <tr className="border-b bg-purple-50"><td className="px-2 py-0.5 font-semibold text-purple-700 bg-purple-50 sticky left-0 z-10 border-r">19. POC <span className="font-normal text-[9px]">ΣP_along × P_offset</span></td>
-            {res.offsetCalcs.map((o,i)=><td key={i}><Cv value={o.poc} className="text-purple-700 font-semibold"/></td>)}</tr>
-          <tr className="border-b bg-emerald-50"><td className="px-2 py-0.5 font-bold text-emerald-800 bg-emerald-100 sticky left-0 z-10 border-r">20. POS <span className="font-normal text-[9px]">POD×POC</span></td>
-            {res.offsetCalcs.map((o,i)=><td key={i}><Cv value={o.pos} className={`font-bold ${Math.abs(o.pos-bestPOS)<0.0001&&bestPOS>0?"text-emerald-800 bg-emerald-200":"text-emerald-700"}`}/></td>)}</tr>
-        </tbody></table></div>
-        {bestPOS > 0 && <div className="mt-1 px-2 py-1 bg-gray-800 rounded text-white text-xs">
-          Best POS: <span className="font-mono font-bold text-emerald-400">{(bestPOS*100).toFixed(1)}%</span> at offset {res.offsetCalcs.find(o=>Math.abs(o.pos-bestPOS)<0.0001)?.offset} nm
+        <div className="flex flex-col gap-3">
+          {res.subCalcs.map((sc,si)=>(
+            <div key={si} className="border rounded">
+              <div className="bg-gray-700 text-white px-2 py-1 flex items-center justify-between text-xs flex-wrap gap-2">
+                <span className="font-bold">Sub-Area {sc.letter}{multi?` — POS Comparison`:""}</span>
+                <span className="flex items-center gap-1 text-gray-300">Prob Along Track (P_T):
+                  <span onClick={e=>e.stopPropagation()}><In value={setup.subAreas[si].pAlongTrack} onChange={v=>uSA(si,"pAlongTrack",v)} step="0.001" className="w-16"/></span>
+                  {sc.chosenIdx!=null && <span className="ml-2">selected POS <span className="font-mono font-bold text-emerald-300">{(sc.chosenPOS*100).toFixed(1)}%</span></span>}</span>
+              </div>
+              <div className="overflow-x-auto"><table className="text-xs border-collapse"><tbody>
+                <tr className="bg-gray-200"><td className="px-2 py-0.5 font-bold sticky left-0 bg-gray-200 z-10 border-r min-w-[200px]">14. Offset (nm)</td>
+                  {setup.offsets.map((o,i)=><td key={i} className="px-0.5 py-0.5 min-w-[70px]"><In value={o.offset} onChange={v=>uOff(i,"offset",v)} step="0.5" className="text-[10px]"/></td>)}</tr>
+                <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">15. Search Segment Width (nm) <span className="font-normal text-[9px]">2×offset</span></td>
+                  {sc.offsetCalcs.map((o,i)=><td key={i}><Cv value={o.segWidth} fmt="dec1" className="text-green-700"/></td>)}</tr>
+                <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">16. Track Spacing (nm) <span className="font-normal text-[9px]">C15÷B13</span></td>
+                  {sc.offsetCalcs.map((o,i)=><td key={i}><Cv value={o.trackSpacing} fmt="dec2" className="text-green-700"/></td>)}</tr>
+                <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">17. Coverage <span className="font-normal text-[9px]">B4÷C16</span></td>
+                  {sc.offsetCalcs.map((o,i)=><td key={i}><Cv value={o.coverage} fmt="dec2" className="text-green-700"/></td>)}</tr>
+                <tr className="border-b bg-blue-50"><td className="px-2 py-0.5 font-semibold text-blue-700 bg-blue-50 sticky left-0 z-10 border-r">18. POD <span className="font-normal text-[9px]">1−e^(−C)</span></td>
+                  {sc.offsetCalcs.map((o,i)=><td key={i}><Cv value={o.pod} className="text-blue-700 font-semibold"/></td>)}</tr>
+                <tr className="border-b bg-indigo-50"><td className="px-2 py-0.5 font-semibold text-indigo-700 bg-indigo-50 sticky left-0 z-10 border-r">P_offset <span className="font-normal text-[9px]">ASAD chart</span></td>
+                  {sc.offsetCalcs.map((o,i)=><td key={i}><Cv value={o.pOffset} className="text-indigo-700"/></td>)}</tr>
+                <tr className="border-b bg-purple-50"><td className="px-2 py-0.5 font-semibold text-purple-700 bg-purple-50 sticky left-0 z-10 border-r">19. POC <span className="font-normal text-[9px]">P_T×P_offset</span></td>
+                  {sc.offsetCalcs.map((o,i)=><td key={i}><Cv value={o.poc} className="text-purple-700 font-semibold"/></td>)}</tr>
+                <tr className="border-b bg-emerald-50"><td className="px-2 py-0.5 font-bold text-emerald-800 bg-emerald-100 sticky left-0 z-10 border-r">20. POS <span className="font-normal text-[9px]">POD×POC · click to select</span></td>
+                  {sc.offsetCalcs.map((o,i)=>{
+                    const isBest = Math.abs(o.pos-sc.bestPOS)<0.0001 && sc.bestPOS>0;
+                    const isSel = sc.chosenIdx===i;
+                    return <td key={i} onClick={()=>uSA(si,"selectedOffsetIdx", isSel?null:i)} className="cursor-pointer">
+                      <Cv value={o.pos} className={`font-bold ${isSel?"bg-emerald-300 text-emerald-900 ring-2 ring-emerald-600":isBest?"text-emerald-800 bg-emerald-200":"text-emerald-700 hover:bg-emerald-100"}`}/></td>;
+                  })}</tr>
+              </tbody></table></div>
+            </div>
+          ))}
+        </div>
+        {res.totalPOS > 0 && <div className="mt-2 px-3 py-1.5 bg-gray-800 rounded text-white text-xs">
+          POS This Search{multi?" (Σ sub-areas)":""}: <span className="font-mono font-bold text-emerald-400">{(res.totalPOS*100).toFixed(1)}%</span>
+        </div>}
+      </div>
+
+      {/* ── Section D (optional) ── */}
+      <div className="border rounded">
+        <button onClick={()=>onUpdate({...setup,useD:!setup.useD})}
+          className="w-full text-left bg-gray-700 text-white px-2 py-1 text-xs font-bold flex items-center justify-between">
+          <span>D — POC CALCULATIONS <span className="font-normal text-gray-300">(partial track, off-center, or per-segment — uses Sub-Area A's flight length as the total track)</span></span>
+          <span className="font-mono">{setup.useD?"▼ hide":"▶ show"}</span>
+        </button>
+        {setup.useD && <div className="p-2">
+          <div className="text-[10px] text-gray-500 mb-2">Enter distances in <b>nautical miles from the LKP</b> (total track = Sub-Area A flight length = {d.refFlight||0} nm). Copy the resulting <b>D23</b> into the matching sub-area's <b>P_T</b> above and pick that offset — POC (Line 19) then equals D27. D27 here is the fully-worked POC for reference.</div>
+          <div className="grid gap-x-6 gap-y-1 text-xs" style={{gridTemplateColumns:"auto auto"}}>
+            <div className="flex items-center justify-between gap-2"><span className="font-semibold text-gray-600">21. Segment Start Point (nm from LKP)</span>
+              <In value={setup.dSeg.startPoint} onChange={v=>uD("startPoint",v)} step="1" className="w-16"/></div>
+            <div className="flex items-center justify-between gap-2"><span className="font-semibold text-gray-600">22. Segment End Point (nm from LKP)</span>
+              <In value={setup.dSeg.endPoint} onChange={v=>uD("endPoint",v)} step="1" className="w-16"/></div>
+            <div className="flex items-center justify-between gap-2 text-gray-500"><span>21a. SP % Along Track <span className="text-[9px]">D21÷A1</span></span>
+              <span className="font-mono">{d.dStartPct.toFixed(1)}%</span></div>
+            <div className="flex items-center justify-between gap-2 text-gray-500"><span>22a. EP % Along Track <span className="text-[9px]">D22÷A1</span></span>
+              <span className="font-mono">{d.dEndPct.toFixed(1)}%</span></div>
+            <div className="flex items-center justify-between gap-2 text-gray-500"><span>21b. SP Prob Along Track</span>
+              <span className="font-mono">{d.dStartProb.toFixed(3)}</span></div>
+            <div className="flex items-center justify-between gap-2 text-gray-500"><span>22b. EP Prob Along Track</span>
+              <span className="font-mono">{d.dEndProb.toFixed(3)}</span></div>
+            <div className="flex items-center justify-between gap-2 col-span-2 bg-green-50 px-1 rounded"><span className="font-semibold text-green-700">23. Probability Along Track <span className="text-[9px]">D22b−D21b</span></span>
+              <span className="font-mono font-bold text-green-700">{d.dAlong.toFixed(3)}</span></div>
+            <div className="flex items-center justify-between gap-2"><span className="font-semibold text-gray-600">24. Left Border Offset (nm)</span>
+              <In value={setup.dSeg.leftOffset} onChange={v=>uD("leftOffset",v)} step="0.5" className="w-16"/></div>
+            <div className="flex items-center justify-between gap-2"><span className="font-semibold text-gray-600">25. Right Border Offset (nm)</span>
+              <In value={setup.dSeg.rightOffset} onChange={v=>uD("rightOffset",v)} step="0.5" className="w-16"/></div>
+            <div className="flex items-center justify-between gap-2 text-gray-500"><span>24a. LB Prob Offset <span className="text-[9px]">ASAD÷2</span></span>
+              <span className="font-mono">{d.dLB.toFixed(3)}</span></div>
+            <div className="flex items-center justify-between gap-2 text-gray-500"><span>25a. RB Prob Offset <span className="text-[9px]">ASAD÷2</span></span>
+              <span className="font-mono">{d.dRB.toFixed(3)}</span></div>
+            <div className="flex items-center gap-2 col-span-2"><span className="font-semibold text-gray-600">Borders are on:</span>
+              <label className="flex items-center gap-1"><input type="radio" checked={setup.dSeg.oppositeSides} onChange={()=>uD("oppositeSides",true)}/>opposite sides of centerline (add)</label>
+              <label className="flex items-center gap-1"><input type="radio" checked={!setup.dSeg.oppositeSides} onChange={()=>uD("oppositeSides",false)}/>same side (subtract)</label></div>
+            <div className="flex items-center justify-between gap-2 col-span-2 bg-green-50 px-1 rounded"><span className="font-semibold text-green-700">26. Probability of Offset <span className="text-[9px]">D25a±D24a</span></span>
+              <span className="font-mono font-bold text-green-700">{d.dOffset.toFixed(3)}</span></div>
+            <div className="flex items-center justify-between gap-2 col-span-2 bg-purple-100 px-1 rounded"><span className="font-bold text-purple-800">27. POC <span className="text-[9px] font-normal">D23×D26</span></span>
+              <span className="font-mono font-black text-purple-800">{d.dPOC.toFixed(3)}</span></div>
+          </div>
+          <div className="mt-2 text-[10px] text-gray-400">Per Appendix C: segment starting at the LKP (0 nm) → D21b treated as 0; segment reaching the destination → D22b uses the over-100% value (0.989).</div>
         </div>}
       </div>
     </div>
@@ -464,6 +594,7 @@ function AirSRUTable({ setup, onUpdate }) {
 
 /* ═══ MAIN APP ═══ */
 export default function App() {
+  const [dark, setDark] = useState(false);
   const [incidentDate, setIncidentDate] = useState(new Date().toISOString().split("T")[0]);
   const [incidentTime, setIncidentTime] = useState("00:00");
   const [location, setLocation] = useState("");
@@ -471,9 +602,9 @@ export default function App() {
   const [wsType, setWsType] = useState("ground");
   const [activeTab, setActiveTab] = useState("setup");
 
-  const [regions, setRegions] = useState(()=>Array.from({length:6},(_,i)=>mkRegion(REGION_LETTERS[i])));
-  const [evaluators, setEvaluators] = useState([mkEval(""),mkEval(""),mkEval("")]);
-  const [gndSegs, setGndSegs] = useState([]);
+  const [regions, setRegions] = useState(()=>[{...mkRegion("A"), numSegments:1}]);
+  const [evaluators, setEvaluators] = useState([mkEval("")]);
+  const [gndSegs, setGndSegs] = useState(()=>[mkGndSeg("A",1)]);
   const [gndSearches, setGndSearches] = useState({});
   const [airSetups, setAirSetups] = useState({setup: mkAirSetup()});
 
@@ -496,20 +627,52 @@ export default function App() {
   const createSearch=()=>{
     const n = wsType==="ground"?gndNextNum:airNextNum;
     if(n>MAX_SEARCHES)return;
-    if(wsType==="ground") setGndSearches(p=>({...p,[n]:{assignments:{}}}));
+    if(wsType==="ground") setGndSearches(p=>({...p,[n]:{assignments:{},totalSearchers:0}}));
     else setAirSetups(p=>({...p,[`search-${n}`]:mkAirSetup()}));
     setActiveTab(`search-${n}`);
   };
 
+  // Auto-allocate: greedily place each searcher where it adds the most POS.
+  // Per Appendix D, max POS occurs when after-search PSR is equalized across
+  // searched segments — greedy marginal-gain assignment produces exactly that.
+  const allocateSearchers = (searchNum, total) => {
+    const assigns = {};
+    gndSegs.forEach((_,i)=>{assigns[i]=0;});
+    let placed = 0;
+    for (let k=0;k<total;k++){
+      let bestI=-1, bestGain=0;
+      gndSegs.forEach((seg,i)=>{
+        const cur = calcGndSearch(seg, regions, assigns[i]).pos;
+        const nxt = calcGndSearch(seg, regions, assigns[i]+1).pos;
+        const gain = nxt - cur;
+        if (gain > bestGain){ bestGain=gain; bestI=i; }
+      });
+      if (bestI<0) break; // nothing gains from more searchers
+      assigns[bestI]++; placed++;
+    }
+    setGndSearches(p=>({...p,[searchNum]:{...p[searchNum],assignments:assigns,totalSearchers:total}}));
+    return placed;
+  };
+
   return (
-    <div style={{fontFamily:"'Inter',system-ui,sans-serif"}} className="h-screen flex flex-col bg-gray-100">
+    <div style={{fontFamily:"'Inter',system-ui,sans-serif"}} className={`${dark?"sm-dark ":""}h-screen flex flex-col bg-gray-100`}>
+      <style>{DARK_CSS}</style>
+      <div className="bg-amber-500 text-black px-3 py-0.5 text-center text-[11px] font-semibold shrink-0">
+        ⚠ TESTING ONLY — not validated for operational search. Found a bug? Email <a href="mailto:peter.dellavecchia@cowg.cap.gov" className="underline">peter.dellavecchia@cowg.cap.gov</a>
+      </div>
       <div className="bg-gray-800 text-white px-3 py-1.5 flex items-center justify-between text-sm shrink-0">
         <div className="flex items-center gap-2">
-          <div className="w-6 h-6 bg-emerald-500 rounded flex items-center justify-center text-[10px] font-black">SM</div>
+          <div className="w-6 h-6 bg-emerald-500 rounded flex items-center justify-center text-white">
+            {wsType==="ground"
+              ? <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M6 2h3.5v8.5c0 .8.5 1.5 1.3 1.8l7 2.6c1 .4 1.7 1.3 1.7 2.4V20H6V2z"/></svg>
+              : <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg>}
+          </div>
           <span className="font-bold">Search Manager</span>
           <span className="text-gray-400">— [{wsType==="ground"?"Ground Search":"Air Search (ASAD)"}]</span>
         </div>
-        <div className="flex gap-1">
+        <div className="flex gap-1 items-center">
+          <button onClick={()=>setDark(d=>!d)} title="Toggle dark mode"
+            className="px-2 py-1 rounded text-xs font-semibold bg-gray-600 hover:bg-gray-500 mr-1">{dark?"☀ Light":"🌙 Dark"}</button>
           <button onClick={()=>{setWsType("ground");setActiveTab("setup");}}
             className={`px-3 py-1 rounded text-xs font-semibold ${wsType==="ground"?"bg-emerald-600":"bg-gray-600 hover:bg-gray-500"}`}>Ground Search</button>
           <button onClick={()=>{setWsType("air");setActiveTab("setup");}}
@@ -547,15 +710,25 @@ export default function App() {
             <div className="overflow-auto border rounded bg-white p-2 flex-1">
               <ConsensusPanel regions={regions} evaluators={evaluators} onUpdateEval={setEvaluators} onApply={applyConsensus}/></div>
             {activeSearchNum&&gndSearches[activeSearchNum]&&(
-              <div className="border rounded bg-white p-3 shrink-0 flex flex-col items-center justify-center" style={{minWidth:130}}>
-                <div className="text-xs font-bold text-gray-500 mb-1">Search #{activeSearchNum}</div>
+              <div className="border rounded bg-white p-3 shrink-0 flex flex-col items-center justify-center gap-1" style={{minWidth:150}}>
+                <div className="text-xs font-bold text-gray-500">Search #{activeSearchNum}</div>
                 <div className="text-xs text-gray-400">POS</div>
                 <div className="text-2xl font-mono font-black text-emerald-600">
                   {(gndSegs.reduce((s,seg,i)=>s+calcGndSearch(seg,regions,gndSearches[activeSearchNum].assignments[i]||0).pos,0)*100).toFixed(1)}%</div>
-                <div className="text-xs text-gray-400 mt-2">POScum</div>
+                <div className="text-xs text-gray-400">POScum</div>
                 <div className="text-lg font-mono font-bold text-gray-700">
                   {(Object.keys(gndSearches).filter(k=>parseInt(k)<=activeSearchNum).reduce((cum,k)=>
                     cum+gndSegs.reduce((s,seg,i)=>s+calcGndSearch(seg,regions,gndSearches[k].assignments[i]||0).pos,0),0)*100).toFixed(1)}%</div>
+                <div className="w-full border-t mt-1 pt-1.5 flex flex-col items-center gap-1">
+                  <label className="text-[10px] font-semibold text-gray-500">Total Searchers</label>
+                  <In value={gndSearches[activeSearchNum].totalSearchers||0} step="1" min="0" className="w-16"
+                    onChange={v=>setGndSearches(p=>({...p,[activeSearchNum]:{...p[activeSearchNum],totalSearchers:Math.max(0,Math.round(v))}}))}/>
+                  <button onClick={()=>allocateSearchers(activeSearchNum, gndSearches[activeSearchNum].totalSearchers||0)}
+                    className="px-2 py-1 bg-emerald-600 text-white rounded text-[10px] font-bold hover:bg-emerald-700 w-full">Auto-Allocate</button>
+                  {(() => { const tot=gndSearches[activeSearchNum].totalSearchers||0;
+                    const used=Object.values(gndSearches[activeSearchNum].assignments||{}).reduce((a,b)=>a+b,0);
+                    return tot>0 && <div className="text-[9px] text-gray-400">{used} of {tot} placed{used<tot?" (rest add no POS)":""}</div>; })()}
+                </div>
               </div>)}
           </div>
           <div className="overflow-auto border rounded bg-white p-2 flex-1 min-h-0">
