@@ -52,6 +52,7 @@ const mkGndSeg = (reg, num) => ({
   id: `${reg}${String(num).padStart(2,"0")}`, region: reg, segNum: num,
   length: 0, baseline: 0, areaOverride: null, sweepWidth: 0, searchSpeed: 0,
   timeOverride: null, // null = use calculated minimum; number = user override
+  tracks: 1,          // A11a Team Tracks — manual, default 1 (matches original)
 });
 const mkEval = (name="") => ({ name, ratings: {} });
 const mkSRU = (id="", region="A") => ({ id, region, sweepWidth:0, fuelEndurance:0, daylightEndurance:0, observerEndurance:0, craftSpeed:0 });
@@ -68,42 +69,73 @@ const mkAirSetup = () => ({
   dSeg: mkDSeg(),
 });
 
-/* ═══ GROUND CALCS — matches Student Guide Rev 07/15 ═══ */
-function calcGndSeg(seg, regions) {
-  const r = regions.find(r => r.letter === seg.region);
-  // A7: Segment Area = L×B (rectangular estimate), or user override for non-square areas
-  const area = (seg.areaOverride != null && seg.areaOverride > 0) ? seg.areaOverride : seg.length * seg.baseline;
-  // A8: Segment POC = (A7 ÷ A2) × A3
-  const poc = r && r.area > 0 ? (area / r.area) * r.poc : 0;
-  // A11: Time to Search = A5÷A10, or max desired search time (user override)
-  const minTime = seg.searchSpeed > 0 ? seg.length / seg.searchSpeed : 0;
-  const timeToSearch = seg.timeOverride !== null && seg.timeOverride > 0 ? seg.timeOverride : minTime;
-  // A11a: Team Tracks = [(A11 × A10) ÷ A5] rounded to whole number
-  const teamTracks = seg.length > 0 && seg.searchSpeed > 0
-    ? Math.max(1, Math.round((timeToSearch * seg.searchSpeed) / seg.length)) : 1;
-  // A11b: Time in Search Segment = [(A11a ÷ A10) × A5]
-  const timeInSeg = seg.searchSpeed > 0 && seg.length > 0
-    ? (teamTracks / seg.searchSpeed) * seg.length : 0;
-  // A12: PSR = [(A10 × A9 × A8) ÷ A7] — NO time component, it's a RATE
-  const psr = area > 0 ? (seg.searchSpeed * seg.sweepWidth * poc) / area : 0;
-  return { area, poc, minTime, timeToSearch, teamTracks, timeInSeg, psr };
+/* ═══ GROUND CALCS — verified against original SearchManager (VM session 07/03/26) ═══
+   The original rounds INTERMEDIATE values and computes forward from the rounded
+   numbers. Matching its output requires matching its rounding, not just formulas. */
+const r1 = v => Math.round(v * 10) / 10;
+const r2 = v => Math.round(v * 100) / 100;
+const r3 = v => Math.round(v * 1000) / 1000;
+
+// A7: Segment Area = L×B, or user override for non-rectangular segments
+const segArea = seg => (seg.areaOverride != null && seg.areaOverride > 0) ? seg.areaOverride : seg.length * seg.baseline;
+
+// Consensus (verified): region POC weight = column sum ÷ grand total of ALL votes
+function consensusPOCs(regions, evaluators) {
+  const colSums = regions.map(r => evaluators.reduce((s, e) => s + (e.ratings[r.letter] || 0), 0));
+  const grand = colSums.reduce((a, b) => a + b, 0);
+  return { pocs: regions.map((_, i) => grand > 0 ? colSums[i] / grand : 0), grand };
 }
 
-function calcGndSearch(seg, regions, assigned) {
-  const c = calcGndSeg(seg, regions);
-  // B14: Spacing = A6 × 5280 ÷ B13 ÷ A11a
-  const sp = assigned > 0 && c.teamTracks > 0 ? (seg.baseline * 5280) / (assigned * c.teamTracks) : 0;
-  // B15: Coverage = A9 ÷ B14
-  const cov = sp > 0 ? seg.sweepWidth / sp : 0;
-  // B16: POD = 1 − e^(−C)
+// A8 for Search #1: Segment POC = regionPOC × (segArea ÷ regionArea), region area = Σ its segments (verified)
+function basePocs(segments, regions) {
+  const regArea = {};
+  segments.forEach(s => { regArea[s.region] = (regArea[s.region] || 0) + segArea(s); });
+  return segments.map(s => {
+    const r = regions.find(r => r.letter === s.region);
+    return r && regArea[s.region] > 0 ? r3((segArea(s) / regArea[s.region]) * r.poc) : 0;
+  });
+}
+
+function calcGndSeg(seg, startPoc) {
+  const area = segArea(seg);
+  // A11: default Time to Search = (A5 ÷ A10) rounded to 1 decimal (verified: 2/3→0.700), user-overridable
+  const minTime = seg.searchSpeed > 0 ? r1(seg.length / seg.searchSpeed) : 0;
+  const timeToSearch = seg.timeOverride !== null && seg.timeOverride > 0 ? seg.timeOverride : minTime;
+  // A11a: Team Tracks is a MANUAL value, default 1 (verified: original never auto-computes it)
+  const teamTracks = Math.max(1, Math.round(seg.tracks || 1));
+  // A11b: Time in Segment = A11 × A11a (verified: follows TTS override exactly)
+  const timeInSeg = timeToSearch * teamTracks;
+  // A12: PSR = (A10 × A9 × A8) ÷ A7 — a RATE, no time component (verified exact: 0.412/0.448/0.484)
+  const psr = area > 0 ? (seg.searchSpeed * seg.sweepWidth * startPoc) / area : 0;
+  return { area, poc: startPoc, minTime, timeToSearch, teamTracks, timeInSeg, psr };
+}
+
+function calcGndSearch(seg, startPoc, assigned) {
+  const c = calcGndSeg(seg, startPoc);
+  // B14: Spacing = A6×5280 ÷ B13 ÷ A11a, integer ft, DISPLAY ONLY — does not feed coverage (verified)
+  const sp = assigned > 0 && c.teamTracks > 0 ? Math.round((seg.baseline * 5280) / (assigned * c.teamTracks)) : 0;
+  // B15: Coverage = (B13 × A10 × A11b × A9÷5280) ÷ A7, rounded to 2 decimals (verified: 221×2×1.5×30/5280/6→0.63)
+  const covRaw = c.area > 0 ? (assigned * seg.searchSpeed * c.timeInSeg * (seg.sweepWidth / 5280)) / c.area : 0;
+  const cov = r2(covRaw);
+  // B16: POD = 1 − e^(−C) computed from the ROUNDED coverage (verified: 0.63→0.467, not 0.466)
   const pod = cov > 0 ? 1 - Math.exp(-cov) : 0;
-  // B17: POS = A8 × B16
-  const pos = c.poc * pod;
-  // B18: POC Remaining = A8 − B17
-  const pocRem = Math.max(0, c.poc - pos);
-  // B19: PSR After = [(A10 × A9 × B18) ÷ A7] — NO time component
+  // B17/B18: rounded to 3 decimals; the rounded values chain forward (verified)
+  const pos = r3(c.poc * pod);
+  const pocRem = r3(Math.max(0, c.poc - pos));
+  // B19: PSR After = (A10 × A9 × B18rounded) ÷ A7 (verified exact: 0.304)
   const psrAfter = c.area > 0 ? (seg.searchSpeed * seg.sweepWidth * pocRem) / c.area : 0;
   return { ...c, sp, cov, pod, pos, pocRem, psrAfter };
+}
+
+// CARRY-FORWARD (verified): Search N starting POC = Search N−1 POC Remaining, per segment
+function chainPocs(segments, regions, gndSearches, uptoExclusive) {
+  let pocs = basePocs(segments, regions);
+  for (let n = 1; n < uptoExclusive; n++) {
+    const srch = gndSearches[n];
+    if (!srch) continue;
+    pocs = pocs.map((p, i) => calcGndSearch(segments[i], p, (srch.assignments && srch.assignments[i]) || 0).pocRem);
+  }
+  return pocs;
 }
 
 /* ═══ ASAD TABLES — All Flight Types (Student Guide Appendix A) ═══ */
@@ -251,8 +283,8 @@ function Cv({ value, fmt="dec3", className="" }) {
   return <div className={`text-xs text-center font-mono py-0.5 px-0.5 ${className}`}>{d}</div>;
 }
 
-/* ═══ REGIONS PANEL ═══ */
-function RegionsPanel({ regions, onUpdate }) {
+/* ═══ REGIONS PANEL — POC auto-fills from Consensus; Area auto-sums from segments ═══ */
+function RegionsPanel({ regions, onUpdate, consensusActive }) {
   const u = (i,f,v) => { const n=[...regions]; n[i]={...n[i],[f]:v}; onUpdate(n); };
   return (
     <div>
@@ -268,8 +300,10 @@ function RegionsPanel({ regions, onUpdate }) {
       </tr></thead><tbody>{regions.map((r,i)=>(
         <tr key={i} className={i%2?"bg-gray-50":"bg-white"}>
           <td className="px-1 py-0.5 font-bold text-gray-600 text-center">{r.letter}</td>
-          <td className="px-0.5"><In value={r.poc} onChange={v=>u(i,"poc",v)} step="0.001" className="w-14"/></td>
-          <td className="px-0.5"><In value={r.area} onChange={v=>u(i,"area",v)} step="0.01" className="w-14"/></td>
+          <td className="px-0.5">{consensusActive
+            ? <Cv value={r.poc} className="text-blue-700 font-semibold"/>
+            : <In value={r.poc} onChange={v=>u(i,"poc",v)} step="0.001" className="w-14"/>}</td>
+          <td className="px-0.5"><Cv value={r.area} fmt="dec2" className="text-gray-600"/></td>
           <td className="px-0.5"><In value={r.numSegments} onChange={v=>u(i,"numSegments",Math.max(1,Math.round(v)))} step="1" min="1" className="w-10"/></td>
         </tr>))}</tbody>
         <tfoot><tr className="bg-gray-200 font-bold text-xs">
@@ -282,16 +316,16 @@ function RegionsPanel({ regions, onUpdate }) {
   );
 }
 
-/* ═══ CONSENSUS PANEL ═══ */
-function ConsensusPanel({ regions, evaluators, onUpdateEval, onApply }) {
+/* ═══ CONSENSUS PANEL — auto-applies to Region POC (weight = column Σ ÷ grand Σ, verified) ═══ */
+function ConsensusPanel({ regions, evaluators, onUpdateEval }) {
   const uN=(i,n)=>{const e=[...evaluators];e[i]={...e[i],name:n};onUpdateEval(e);};
   const uR=(ei,rl,v)=>{const e=[...evaluators];e[ei]={...e[ei],ratings:{...e[ei].ratings,[rl]:v}};onUpdateEval(e);};
+  const { pocs, grand } = consensusPOCs(regions, evaluators);
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
-        <span className="text-xs font-bold text-gray-700">Consensus</span>
+        <span className="text-xs font-bold text-gray-700">Consensus <span className="font-normal text-[9px] text-gray-400">auto-applies to Region POC</span></span>
         <div className="flex gap-1">
-          <button onClick={onApply} className="text-[10px] px-2 py-0.5 bg-blue-600 text-white rounded font-semibold">Apply →</button>
           <button onClick={()=>onUpdateEval([...evaluators,mkEval("")])} className="text-[10px] px-1.5 py-0.5 bg-green-600 text-white rounded">+</button>
           <button onClick={()=>evaluators.length>1&&onUpdateEval(evaluators.slice(0,-1))} className="text-[10px] px-1.5 py-0.5 bg-red-600 text-white rounded">−</button>
         </div>
@@ -306,16 +340,22 @@ function ConsensusPanel({ regions, evaluators, onUpdateEval, onApply }) {
           <td className="px-0.5"><In value={ev.name} type="text" onChange={v=>uN(ei,v)} placeholder="Name" className="w-14 text-[10px]"/></td>
           {regions.map(r=><td key={r.letter} className="px-0.5"><In value={ev.ratings[r.letter]||0} onChange={v=>uR(ei,r.letter,v)} step="1" className="w-9 text-[10px]"/></td>)}
           <td className="px-1 text-center font-bold text-red-600">{total}</td>
-        </tr>);})}</tbody></table></div>
+        </tr>);})}</tbody>
+        <tfoot><tr className="bg-gray-200 font-bold">
+          <td className="px-1 py-0.5 text-[10px]">Weights</td>
+          {regions.map((r,i)=><td key={r.letter} className="px-1 text-center font-mono text-[10px]">{grand>0?pocs[i].toFixed(3).replace(/^0/,""):"—"}</td>)}
+          <td className="px-1 text-center text-[10px]">{grand||""}</td>
+        </tr></tfoot>
+      </table></div>
     </div>
   );
 }
 
 /* ═══ GROUND SEGMENTS TABLE ═══ */
-function GndSegTable({ segments, regions, onUpdateSeg, searchAssign, onUpdateAssign }) {
-  const calcs = useMemo(()=>segments.map(s=>calcGndSeg(s,regions)),[segments,regions]);
+function GndSegTable({ segments, startPocs, onUpdateSeg, searchAssign, onUpdateAssign }) {
+  const calcs = useMemo(()=>segments.map((s,i)=>calcGndSeg(s,startPocs[i]||0)),[segments,startPocs]);
   const weights = useMemo(()=>{const p=calcs.map(c=>c.psr);const t=p.reduce((a,b)=>a+b,0);return p.map(v=>t>0?v/t:0);},[calcs]);
-  const sCalcs = useMemo(()=>searchAssign?segments.map((s,i)=>calcGndSearch(s,regions,searchAssign[i]||0)):null,[segments,regions,searchAssign]);
+  const sCalcs = useMemo(()=>searchAssign?segments.map((s,i)=>calcGndSearch(s,startPocs[i]||0,searchAssign[i]||0)):null,[segments,startPocs,searchAssign]);
   const totalPOS = sCalcs?sCalcs.reduce((a,c)=>a+c.pos,0):0;
   const u=(i,f,v)=>{const n=[...segments];n[i]={...n[i],[f]:v};onUpdateSeg(n);};
 
@@ -363,11 +403,11 @@ function GndSegTable({ segments, regions, onUpdateSeg, searchAssign, onUpdateAss
               onChange={v => u(i, "timeOverride", v > 0 ? v : null)}
               step="0.1" className={`text-[10px] ${s.timeOverride !== null ? "bg-yellow-50 border-yellow-400" : ""}`}/>
           </td>)}</tr>
-        {/* A11a: Team Tracks (calculated) */}
-        <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">11a. Team Tracks <span className="font-normal text-[9px]">(A11×A10)÷A5</span></td>
-          {calcs.map((c,i)=><td key={i}><Cv value={c.teamTracks} fmt="int" className="text-green-700 font-semibold"/></td>)}</tr>
-        {/* A11b: Time in Segment (calculated) */}
-        <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">11b. Time in Seg (hr) <span className="font-normal text-[9px]">(A11a÷A10)×A5</span></td>
+        {/* A11a: Team Tracks — manual, default 1 (matches original) */}
+        <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">11a. Team Tracks <span className="font-normal text-[9px]">manual, default 1</span></td>
+          {segments.map((s,i)=><td key={i} className="px-0.5 py-0.5"><In value={s.tracks||1} onChange={v=>u(i,"tracks",Math.max(1,Math.round(v)))} step="1" min="1" className="text-[10px]"/></td>)}</tr>
+        {/* A11b: Time in Segment = A11 × A11a (verified) */}
+        <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">11b. Time in Seg (hr) <span className="font-normal text-[9px]">A11×A11a</span></td>
           {calcs.map((c,i)=><td key={i}><Cv value={c.timeInSeg} fmt="dec1" className="text-green-700"/></td>)}</tr>
         {/* A12: PSR — FIXED: (A10 × A9 × A8) ÷ A7 */}
         <tr className="border-b bg-amber-50"><td className="px-2 py-0.5 font-bold text-amber-800 bg-amber-50 sticky left-0 z-10 border-r">12. PSR <span className="font-normal text-[9px]">(A10×A9×A8)÷A7</span></td>
@@ -383,8 +423,8 @@ function GndSegTable({ segments, regions, onUpdateSeg, searchAssign, onUpdateAss
           {/* B14: Spacing */}
           <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">14. Spacing (ft) <span className="font-normal text-[9px]">A6×5280÷B13÷A11a</span></td>
             {sCalcs.map((c,i)=><td key={i}><Cv value={c.sp} fmt="int" className="bg-gray-100"/></td>)}</tr>
-          {/* B15: Coverage */}
-          <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">15. Coverage <span className="font-normal text-[9px]">A9÷B14</span></td>
+          {/* B15: Coverage = effort-based (verified against original; NOT sweep÷spacing) */}
+          <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">15. Coverage <span className="font-normal text-[9px]">(B13×A10×A11b×A9÷5280)÷A7</span></td>
             {sCalcs.map((c,i)=><td key={i}><Cv value={c.cov} fmt="dec2" className="bg-gray-100"/></td>)}</tr>
           {/* B16: POD */}
           <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-blue-700 bg-blue-50 sticky left-0 z-10 border-r">16. POD <span className="font-normal text-[9px]">1−e^(−C)</span></td>
@@ -614,13 +654,25 @@ export default function App() {
     setGndSegs(ns);
   },[gndSegs]);
 
-  const applyConsensus=()=>{
-    const avgs=regions.map(r=>{const v=evaluators.map(e=>e.ratings[r.letter]||0).filter(v=>v>0);return v.length>0?v.reduce((a,b)=>a+b,0)/v.length:0;});
-    const t=avgs.reduce((a,b)=>a+b,0);
-    setRegions(regions.map((r,i)=>({...r,poc:t>0?avgs[i]/t:0})));
-  };
+  // Regions with POC auto-derived from consensus (when votes exist) and Area = Σ segment areas.
+  // Matches original: no Apply step, everything recomputes live.
+  const consensus = useMemo(()=>consensusPOCs(regions, evaluators),[regions, evaluators]);
+  const regionsEff = useMemo(()=>regions.map((r,i)=>({
+    ...r,
+    poc: consensus.grand > 0 ? consensus.pocs[i] : r.poc,
+    area: gndSegs.filter(s=>s.region===r.letter).reduce((a,s)=>a+segArea(s),0),
+  })),[regions, consensus, gndSegs]);
 
   const activeSearchNum = activeTab.startsWith("search-")?parseInt(activeTab.split("-")[1]):null;
+
+  // Starting POC per segment for the current view: Setup/#1 = from regions; #N = chained from #N−1 (verified)
+  const startPocs = useMemo(()=>chainPocs(gndSegs, regionsEff, gndSearches, activeSearchNum||1),
+    [gndSegs, regionsEff, gndSearches, activeSearchNum]);
+  const searchPOS = (n)=>{ // total POS of search n under chained POCs
+    const pocs = chainPocs(gndSegs, regionsEff, gndSearches, n);
+    const srch = gndSearches[n]; if(!srch) return 0;
+    return gndSegs.reduce((s,seg,i)=>s+calcGndSearch(seg,pocs[i],(srch.assignments&&srch.assignments[i])||0).pos,0);
+  };
   const gndNextNum = Object.keys(gndSearches).length+1;
   const airNextNum = Object.keys(airSetups).filter(k=>k.startsWith("search-")).length+1;
 
@@ -632,26 +684,42 @@ export default function App() {
     setActiveTab(`search-${n}`);
   };
 
-  // Auto-allocate: greedily place each searcher where it adds the most POS.
-  // Per Appendix D, max POS occurs when after-search PSR is equalized across
-  // searched segments — greedy marginal-gain assignment produces exactly that.
+  // Optimize (verified against original): PSR-equalization "water-fill".
+  // Pour searchers into segments so every funded segment's PSR-After lands on a
+  // common level λ; segments whose starting PSR is below λ get zero. The original
+  // produced 221/79 with equal PSR-After 0.960/0.960 — this reproduces that.
   const allocateSearchers = (searchNum, total) => {
-    const assigns = {};
-    gndSegs.forEach((_,i)=>{assigns[i]=0;});
-    let placed = 0;
-    for (let k=0;k<total;k++){
-      let bestI=-1, bestGain=0;
-      gndSegs.forEach((seg,i)=>{
-        const cur = calcGndSearch(seg, regions, assigns[i]).pos;
-        const nxt = calcGndSearch(seg, regions, assigns[i]+1).pos;
-        const gain = nxt - cur;
-        if (gain > bestGain){ bestGain=gain; bestI=i; }
-      });
-      if (bestI<0) break; // nothing gains from more searchers
-      assigns[bestI]++; placed++;
+    const pocs = chainPocs(gndSegs, regionsEff, gndSearches, searchNum);
+    const cs = gndSegs.map((s,i)=>({s,i,c:calcGndSeg(s,pocs[i])}))
+      .filter(x=>x.c.area>0 && x.s.searchSpeed>0 && x.s.sweepWidth>0 && x.c.timeInSeg>0 && x.c.poc>0);
+    const assigns = {}; gndSegs.forEach((_,i)=>{assigns[i]=0;});
+    if (total>0 && cs.length>0) {
+      // searchers needed (unrounded) to pull segment PSR-After down to level lam
+      const needed=(x,lam)=>{
+        if (x.c.psr<=lam) return 0;
+        const k=(x.s.searchSpeed*x.s.sweepWidth)/x.c.area;      // PSR per unit POC
+        const podT=1-(lam/k)/x.c.poc;                            // POD needed to reach lam
+        if (podT<=0) return 0;
+        const cov=-Math.log(Math.max(1-podT,1e-9));
+        return (cov*x.c.area*5280)/(x.s.searchSpeed*x.c.timeInSeg*x.s.sweepWidth);
+      };
+      let lo=0, hi=Math.max(...cs.map(x=>x.c.psr));
+      for (let it=0; it<60; it++){
+        const mid=(lo+hi)/2;
+        (cs.reduce((a,x)=>a+needed(x,mid),0) > total) ? lo=mid : hi=mid;
+      }
+      let used=0;
+      cs.forEach(x=>{ const n=Math.floor(needed(x,hi)); assigns[x.i]=n; used+=n; });
+      // distribute integer remainder by marginal POS gain (unrounded coverage so +1 always registers)
+      const posU=(x,n)=>{const cov=(n*x.s.searchSpeed*x.c.timeInSeg*x.s.sweepWidth/5280)/x.c.area;return x.c.poc*(1-Math.exp(-cov));};
+      while (used<total){
+        let best=null, bg=0;
+        cs.forEach(x=>{ const g=posU(x,assigns[x.i]+1)-posU(x,assigns[x.i]); if(g>bg){bg=g;best=x;} });
+        if (!best) break;
+        assigns[best.i]++; used++;
+      }
     }
     setGndSearches(p=>({...p,[searchNum]:{...p[searchNum],assignments:assigns,totalSearchers:total}}));
-    return placed;
   };
 
   return (
@@ -706,19 +774,18 @@ export default function App() {
         <div className="flex-1 flex flex-col p-2 gap-2 overflow-hidden min-h-0">
           <div className="flex gap-2 shrink-0" style={{maxHeight:"50%"}}>
             <div className="overflow-y-auto border rounded bg-white p-2" style={{minWidth:210,maxWidth:220}}>
-              <RegionsPanel regions={regions} onUpdate={rebuildSegs}/></div>
+              <RegionsPanel regions={regionsEff} onUpdate={rebuildSegs} consensusActive={consensus.grand>0}/></div>
             <div className="overflow-auto border rounded bg-white p-2 flex-1">
-              <ConsensusPanel regions={regions} evaluators={evaluators} onUpdateEval={setEvaluators} onApply={applyConsensus}/></div>
+              <ConsensusPanel regions={regions} evaluators={evaluators} onUpdateEval={setEvaluators}/></div>
             {activeSearchNum&&gndSearches[activeSearchNum]&&(
               <div className="border rounded bg-white p-3 shrink-0 flex flex-col items-center justify-center gap-1" style={{minWidth:150}}>
                 <div className="text-xs font-bold text-gray-500">Search #{activeSearchNum}</div>
                 <div className="text-xs text-gray-400">POS</div>
                 <div className="text-2xl font-mono font-black text-emerald-600">
-                  {(gndSegs.reduce((s,seg,i)=>s+calcGndSearch(seg,regions,gndSearches[activeSearchNum].assignments[i]||0).pos,0)*100).toFixed(1)}%</div>
+                  {(searchPOS(activeSearchNum)*100).toFixed(1)}%</div>
                 <div className="text-xs text-gray-400">POScum</div>
                 <div className="text-lg font-mono font-bold text-gray-700">
-                  {(Object.keys(gndSearches).filter(k=>parseInt(k)<=activeSearchNum).reduce((cum,k)=>
-                    cum+gndSegs.reduce((s,seg,i)=>s+calcGndSearch(seg,regions,gndSearches[k].assignments[i]||0).pos,0),0)*100).toFixed(1)}%</div>
+                  {(Object.keys(gndSearches).map(Number).filter(k=>k<=activeSearchNum).reduce((cum,k)=>cum+searchPOS(k),0)*100).toFixed(1)}%</div>
                 <div className="w-full border-t mt-1 pt-1.5 flex flex-col items-center gap-1">
                   <label className="text-[10px] font-semibold text-gray-500">Total Searchers</label>
                   <In value={gndSearches[activeSearchNum].totalSearchers||0} step="1" min="0" className="w-16"
@@ -732,7 +799,7 @@ export default function App() {
               </div>)}
           </div>
           <div className="overflow-auto border rounded bg-white p-2 flex-1 min-h-0">
-            <GndSegTable segments={gndSegs} regions={regions} onUpdateSeg={setGndSegs}
+            <GndSegTable segments={gndSegs} startPocs={startPocs} onUpdateSeg={setGndSegs}
               searchAssign={activeSearchNum?gndSearches[activeSearchNum]?.assignments:null}
               onUpdateAssign={activeSearchNum?(i,v)=>setGndSearches(p=>({...p,[activeSearchNum]:{...p[activeSearchNum],assignments:{...p[activeSearchNum].assignments,[i]:Math.max(0,Math.round(v))}}})):null}/></div>
         </div>
