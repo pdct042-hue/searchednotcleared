@@ -249,11 +249,12 @@ function calcAirSearch(setup) {
 }
 
 /* ═══ SHARED COMPONENTS ═══ */
-function In({ value, onChange, className="", type="number", step, min, placeholder }) {
+function In({ value, onChange, className="", type="number", step, min, placeholder, dec }) {
   const [draft, setDraft] = useState(null); // null = not editing, use parent value
   const [prevValue, setPrevValue] = useState(value);
   const isEditing = draft !== null;
-  const displayValue = isEditing ? draft : (value ?? "");
+  const fmt = v => (dec!=null && type==="number" && v!=null && isFinite(v)) ? Number(v).toFixed(dec) : (v ?? "");
+  const displayValue = isEditing ? draft : fmt(value);
 
   const commit = (raw) => {
     const v = type === "number" ? (raw === "" || raw === "-" ? 0 : parseFloat(raw)) : raw;
@@ -281,6 +282,13 @@ function Cv({ value, fmt="dec3", className="" }) {
     else d=value.toString();
   }
   return <div className={`text-xs text-center font-mono py-0.5 px-0.5 ${className}`}>{d}</div>;
+}
+// Hover "i" — instant styled tooltip (native title was slow / rendered oversized on Linux)
+function Info({ tip }) {
+  return <span className="relative inline-block ml-1 align-middle group">
+    <span className="inline-flex items-center justify-center w-3 h-3 rounded-full bg-gray-300 text-gray-700 text-[8px] font-bold leading-none cursor-help">i</span>
+    <span className="pointer-events-none absolute left-4 -top-1 z-50 hidden group-hover:block w-60 bg-gray-800 text-white text-[10px] font-normal normal-case rounded p-2 shadow-lg whitespace-normal text-left">{tip}</span>
+  </span>;
 }
 
 /* ═══ REGIONS PANEL — POC auto-fills from Consensus; Area auto-sums from segments ═══ */
@@ -364,21 +372,21 @@ function GndSegTable({ segments, startPocs, onUpdateSeg, searchAssign, onUpdateA
       <div className="flex items-center gap-2 mb-1">
         <span className="text-xs font-bold text-gray-700">Segments</span>
         <div className="flex gap-1 text-[10px] text-gray-400 overflow-x-auto">
-          <span>Wt:</span>{weights.map((w,i)=><span key={i} className="font-mono">.{Math.round(w*1000).toString().padStart(3,"0")}</span>)}
+          <span>PSR weight<Info tip="Each segment's share of total PSR — where effort pays off most."/>:</span>{weights.map((w,i)=><span key={i} className="font-mono">.{Math.round(w*1000).toString().padStart(3,"0")}</span>)}
         </div>
       </div>
       <div className="overflow-x-auto border rounded"><table className="text-xs border-collapse"><tbody>
         {/* Segment ID */}
-        <tr className="bg-gray-200"><td className="px-2 py-0.5 font-bold sticky left-0 bg-gray-200 z-10 border-r min-w-[130px]">4. Segment</td>
+        <tr className="bg-gray-200"><td className="px-2 py-0.5 font-bold sticky left-0 bg-gray-200 z-10 border-r min-w-[130px]">4. Segment<Info tip="Segment ID: region letter + number. Segments are the pieces each region is divided into for searching."/></td>
           {segments.map((s,i)=><td key={i} className="px-0.5 py-0.5 text-center font-bold min-w-[60px]">{s.id}</td>)}</tr>
         {/* A5: Length */}
-        <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">5. Length (mi)</td>
+        <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">5. Length (mi)<Info tip="Length of the segment along the direction of searcher travel, in miles."/></td>
           {segments.map((s,i)=><td key={i} className="px-0.5 py-0.5"><In value={s.length} onChange={v=>u(i,"length",v)} step="0.01" className="text-[10px]"/></td>)}</tr>
         {/* A6: Baseline */}
-        <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">6. Baseline (mi)</td>
+        <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">6. Baseline (mi)<Info tip="Width of the segment perpendicular to travel, in miles. Searcher spacing divides this line among the team."/></td>
           {segments.map((s,i)=><td key={i} className="px-0.5 py-0.5"><In value={s.baseline} onChange={v=>u(i,"baseline",v)} step="0.01" className="text-[10px]"/></td>)}</tr>
         {/* A7: Area — computed L×B, overridable for non-rectangular segments */}
-        <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">7. Area (mi²) <span className="font-normal text-[9px]">A5×A6 or override</span></td>
+        <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">7. Area (mi²)<Info tip="Segment area in square miles. Defaults to Length × Baseline — type a different value for non-rectangular segments. Region Area is the sum of its segments."/></td>
           {segments.map((s,i)=>{
             const computed = (s.length||0)*(s.baseline||0);
             const overridden = s.areaOverride != null && s.areaOverride > 0;
@@ -387,30 +395,30 @@ function GndSegTable({ segments, startPocs, onUpdateSeg, searchAssign, onUpdateA
               className={`text-[10px] ${overridden?"bg-amber-50 border-amber-400":""}`}/></td>;
           })}</tr>
         {/* A8: POC (calculated) */}
-        <tr className="border-b bg-blue-50"><td className="px-2 py-0.5 font-semibold text-blue-700 bg-blue-50 sticky left-0 z-10 border-r">8. Seg POC <span className="font-normal text-[9px]">(A7÷A2)×A3</span></td>
+        <tr className="border-b bg-blue-50"><td className="px-2 py-0.5 font-semibold text-blue-700 bg-blue-50 sticky left-0 z-10 border-r">8. Seg POC<Info tip="Probability the subject is in this segment: region POC split by this segment's share of the region's area. In Search #2 and later this is the previous search's POC Remaining, carried forward."/></td>
           {calcs.map((c,i)=><td key={i}><Cv value={c.poc} className="text-blue-700 font-semibold"/></td>)}</tr>
         {/* A9: Sweep Width */}
-        <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">9. Sweep Width (ft)</td>
+        <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">9. Sweep Width (ft)<Info tip="Effective sweep width per searcher, in feet, from sweep width tables or detection experiments."/></td>
           {segments.map((s,i)=><td key={i} className="px-0.5 py-0.5"><In value={s.sweepWidth} onChange={v=>u(i,"sweepWidth",v)} step="1" className="text-[10px]"/></td>)}</tr>
         {/* A10: Speed */}
-        <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">10. Speed (mph)</td>
+        <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">10. Speed (mph)<Info tip="Searcher travel speed while searching, mph."/></td>
           {segments.map((s,i)=><td key={i} className="px-0.5 py-0.5"><In value={s.searchSpeed} onChange={v=>u(i,"searchSpeed",v)} step="0.01" className="text-[10px]"/></td>)}</tr>
         {/* A11: Time to Search — EDITABLE, defaults to min */}
         <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">
-          11. Time to Search (hr) <span className="font-normal text-[9px] text-gray-400">min={calcs[0]?.minTime.toFixed(1)||"—"}</span></td>
+          11. Time to Search (hr)<Info tip="Hours the team will spend searching. Defaults to Length ÷ Speed rounded to 1 decimal (the original's rule, shown as 3 decimals like the book); type to override."/></td>
           {segments.map((s,i)=><td key={i} className="px-0.5 py-0.5">
-            <In value={s.timeOverride !== null ? s.timeOverride : (calcs[i]?.minTime || 0)}
+            <In value={s.timeOverride !== null ? s.timeOverride : (calcs[i]?.minTime || 0)} dec={3}
               onChange={v => u(i, "timeOverride", v > 0 ? v : null)}
               step="0.1" className={`text-[10px] ${s.timeOverride !== null ? "bg-yellow-50 border-yellow-400" : ""}`}/>
           </td>)}</tr>
         {/* A11a: Team Tracks — manual, default 1 (matches original) */}
-        <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">11a. Team Tracks <span className="font-normal text-[9px]">manual, default 1</span></td>
+        <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">11a. Team Tracks<Info tip="Number of passes the team makes through the segment. Manual value, default 1 — matches the original program."/></td>
           {segments.map((s,i)=><td key={i} className="px-0.5 py-0.5"><In value={s.tracks||1} onChange={v=>u(i,"tracks",Math.max(1,Math.round(v)))} step="1" min="1" className="text-[10px]"/></td>)}</tr>
         {/* A11b: Time in Segment = A11 × A11a (verified) */}
-        <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">11b. Time in Seg (hr) <span className="font-normal text-[9px]">A11×A11a</span></td>
-          {calcs.map((c,i)=><td key={i}><Cv value={c.timeInSeg} fmt="dec1" className="text-green-700"/></td>)}</tr>
+        <tr className="border-b bg-green-50"><td className="px-2 py-0.5 font-semibold text-green-700 bg-green-50 sticky left-0 z-10 border-r">11b. Time in Seg (hr)<Info tip="Total time in the segment = Time to Search × Team Tracks. This drives Coverage."/></td>
+          {calcs.map((c,i)=><td key={i}><Cv value={c.timeInSeg} className="text-green-700"/></td>)}</tr>
         {/* A12: PSR — FIXED: (A10 × A9 × A8) ÷ A7 */}
-        <tr className="border-b bg-amber-50"><td className="px-2 py-0.5 font-bold text-amber-800 bg-amber-50 sticky left-0 z-10 border-r">12. PSR <span className="font-normal text-[9px]">(A10×A9×A8)÷A7</span></td>
+        <tr className="border-b bg-amber-50"><td className="px-2 py-0.5 font-bold text-amber-800 bg-amber-50 sticky left-0 z-10 border-r">12. PSR<Info tip="Probable Success Rate — how much POC one unit of effort recovers here (Speed × Sweep × POC ÷ Area). Ranks segments; Auto-Allocate pours searchers until PSR-After levels out."/></td>
           {calcs.map((c,i)=><td key={i}><Cv value={c.psr} fmt="dec2" className="text-amber-800 font-bold"/></td>)}</tr>
 
         {/* Section B: Search Allocation */}
@@ -418,25 +426,25 @@ function GndSegTable({ segments, startPocs, onUpdateSeg, searchAssign, onUpdateA
           <tr className="bg-gray-300"><td colSpan={segments.length+1} className="px-2 py-0.5 font-bold text-[10px]">
             B — EFFORT ALLOCATION | {Object.values(searchAssign).reduce((a,b)=>a+b,0)} searchers | POS: {(totalPOS*100).toFixed(1)}%</td></tr>
           {/* B13: Searchers */}
-          <tr className="border-b"><td className="px-2 py-0.5 font-semibold bg-yellow-50 sticky left-0 z-10 border-r">13. Searchers</td>
+          <tr className="border-b"><td className="px-2 py-0.5 font-semibold bg-yellow-50 sticky left-0 z-10 border-r">13. Searchers<Info tip="Searchers assigned to this segment this period. Auto-Allocate fills these; you can edit any cell by hand."/></td>
             {segments.map((_,i)=><td key={i} className="px-0.5 py-0.5"><In value={searchAssign[i]||0} onChange={v=>onUpdateAssign(i,v)} step="1" min="0" className="text-[10px] bg-yellow-50 border-yellow-300"/></td>)}</tr>
           {/* B14: Spacing */}
-          <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">14. Spacing (ft) <span className="font-normal text-[9px]">A6×5280÷B13÷A11a</span></td>
+          <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">14. Spacing (ft)<Info tip="Distance between searchers on the baseline, in feet (Baseline × 5280 ÷ Searchers ÷ Tracks). Display only — the original does not use it in Coverage."/></td>
             {sCalcs.map((c,i)=><td key={i}><Cv value={c.sp} fmt="int" className="bg-gray-100"/></td>)}</tr>
           {/* B15: Coverage = effort-based (verified against original; NOT sweep÷spacing) */}
-          <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">15. Coverage <span className="font-normal text-[9px]">(B13×A10×A11b×A9÷5280)÷A7</span></td>
+          <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">15. Coverage<Info tip="Effort ÷ area: (Searchers × Speed × Time in Seg × Sweep÷5280) ÷ Area, rounded to 2 decimals like the original. POD is computed from the rounded value."/></td>
             {sCalcs.map((c,i)=><td key={i}><Cv value={c.cov} fmt="dec2" className="bg-gray-100"/></td>)}</tr>
           {/* B16: POD */}
-          <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-blue-700 bg-blue-50 sticky left-0 z-10 border-r">16. POD <span className="font-normal text-[9px]">1−e^(−C)</span></td>
+          <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-blue-700 bg-blue-50 sticky left-0 z-10 border-r">16. POD<Info tip="Probability of detecting the subject IF they are in the segment: 1 − e^(−Coverage)."/></td>
             {sCalcs.map((c,i)=><td key={i}><Cv value={c.pod} className="bg-blue-50 text-blue-700 font-semibold"/></td>)}</tr>
           {/* B17: POS */}
-          <tr className="border-b bg-emerald-50"><td className="px-2 py-0.5 font-bold text-emerald-800 bg-emerald-100 sticky left-0 z-10 border-r">17. POS <span className="font-normal text-[9px]">A8×B16</span></td>
+          <tr className="border-b bg-emerald-50"><td className="px-2 py-0.5 font-bold text-emerald-800 bg-emerald-100 sticky left-0 z-10 border-r">17. POS<Info tip="Probability of success this search = POC × POD."/></td>
             {sCalcs.map((c,i)=><td key={i}><Cv value={c.pos} className="text-emerald-800 font-bold"/></td>)}</tr>
           {/* B18: POC Remaining */}
-          <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">18. POC Remain <span className="font-normal text-[9px]">A8−B17</span></td>
+          <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">18. POC Remain<Info tip="POC left after this search (POC − POS). Becomes this segment's starting POC next search period."/></td>
             {sCalcs.map((c,i)=><td key={i}><Cv value={c.pocRem} className="bg-gray-100"/></td>)}</tr>
           {/* B19: PSR After — FIXED: (A10 × A9 × B18) ÷ A7 */}
-          <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">19. PSR After <span className="font-normal text-[9px]">(A10×A9×B18)÷A7</span></td>
+          <tr className="border-b"><td className="px-2 py-0.5 font-semibold text-gray-600 bg-gray-50 sticky left-0 z-10 border-r">19. PSR After<Info tip="PSR recomputed with POC Remaining. Auto-Allocate equalizes this across every funded segment — the original's optimizer behavior."/></td>
             {sCalcs.map((c,i)=><td key={i}><Cv value={c.psrAfter} fmt="dec2" className="bg-gray-100"/></td>)}</tr>
         </>}
       </tbody></table></div>
@@ -722,6 +730,17 @@ export default function App() {
     setGndSearches(p=>({...p,[searchNum]:{...p[searchNum],assignments:assigns,totalSearchers:total}}));
   };
 
+  // Delete a search period (confirm like the original), renumber the ones after it
+  const deleteSearch = (n) => {
+    if (!window.confirm(`Delete Search #${n}?`)) return;
+    setGndSearches(p=>{
+      const q={};
+      Object.keys(p).map(Number).forEach(k=>{ if(k<n) q[k]=p[k]; else if(k>n) q[k-1]=p[k]; });
+      return q;
+    });
+    setActiveTab(n>1?`search-${n-1}`:"setup");
+  };
+
   return (
     <div style={{fontFamily:"'Inter',system-ui,sans-serif"}} className={`${dark?"sm-dark ":""}h-screen flex flex-col bg-gray-100`}>
       <style>{DARK_CSS}</style>
@@ -792,6 +811,8 @@ export default function App() {
                     onChange={v=>setGndSearches(p=>({...p,[activeSearchNum]:{...p[activeSearchNum],totalSearchers:Math.max(0,Math.round(v))}}))}/>
                   <button onClick={()=>allocateSearchers(activeSearchNum, gndSearches[activeSearchNum].totalSearchers||0)}
                     className="px-2 py-1 bg-emerald-600 text-white rounded text-[10px] font-bold hover:bg-emerald-700 w-full">Auto-Allocate</button>
+                  <button onClick={()=>deleteSearch(activeSearchNum)}
+                    className="px-2 py-1 bg-red-600 text-white rounded text-[10px] font-bold hover:bg-red-700 w-full">Delete This Search</button>
                   {(() => { const tot=gndSearches[activeSearchNum].totalSearchers||0;
                     const used=Object.values(gndSearches[activeSearchNum].assignments||{}).reduce((a,b)=>a+b,0);
                     return tot>0 && <div className="text-[9px] text-gray-400">{used} of {tot} placed{used<tot?" (rest add no POS)":""}</div>; })()}
