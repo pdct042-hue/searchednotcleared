@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from "react";
+import Landing from "./Landing.jsx";
 
 const MAX_REGIONS = 18, MAX_SEARCHES = 14, MAX_SRUS = 12, MAX_OFFSETS = 10;
 const REGION_LETTERS = "ABCDEFGHIJKLMNOPQR".split("");
@@ -643,6 +644,7 @@ function AirSRUTable({ setup, onUpdate }) {
 /* ═══ MAIN APP ═══ */
 export default function App() {
   const [dark, setDark] = useState(false);
+  const [showLanding, setShowLanding] = useState(true);
   const [incidentDate, setIncidentDate] = useState(new Date().toISOString().split("T")[0]);
   const [incidentTime, setIncidentTime] = useState("00:00");
   const [location, setLocation] = useState("");
@@ -741,6 +743,8 @@ export default function App() {
     setActiveTab(n>1?`search-${n-1}`:"setup");
   };
 
+  if (showLanding) return <Landing onEnter={(t)=>{setWsType(t);setActiveTab("setup");setShowLanding(false);}} />;
+
   return (
     <div style={{fontFamily:"'Inter',system-ui,sans-serif"}} className={`${dark?"sm-dark ":""}h-screen flex flex-col bg-gray-100`}>
       <style>{DARK_CSS}</style>
@@ -758,6 +762,8 @@ export default function App() {
           <span className="text-gray-400">— [{wsType==="ground"?"Ground Search":"Air Search (ASAD)"}]</span>
         </div>
         <div className="flex gap-1 items-center">
+          <button onClick={()=>setShowLanding(true)} title="Back to landing page"
+            className="px-2 py-1 rounded text-xs font-semibold bg-gray-600 hover:bg-gray-500">⌂ Home</button>
           <button onClick={()=>setDark(d=>!d)} title="Toggle dark mode"
             className="px-2 py-1 rounded text-xs font-semibold bg-gray-600 hover:bg-gray-500 mr-1">{dark?"☀ Light":"🌙 Dark"}</button>
           <button onClick={()=>{setWsType("ground");setActiveTab("setup");}}
