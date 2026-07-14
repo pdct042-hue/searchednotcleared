@@ -132,6 +132,9 @@ export default function Landing({ onEnter }) {
             <Ref title="Inland SAR Planning Course, National SAR School"
               meta="The five-day course these worksheets come from, taught by the joint USCG and USAF National SAR School."
               href="https://www.forcecom.uscg.mil/Our-Organization/FORCECOM-UNITS/TraCen-Yorktown/Training/Maritime-Search-Rescue/Inland-SAR/Inland-Course/" />
+            <Ref title="ISPC Student Guide (November 2016)"
+              meta="National SAR School. The course text these worksheets follow, including the worksheet appendices."
+              href="/ISPC_Student_Guide_Nov_2016.pdf" />
             <Ref title="Sweep Width Estimation for Ground Search and Rescue (2004)"
               meta="Koester, Cooper, Frost, and Robe. U.S. Coast Guard. Ground detection experiments and sweep width tables."
               href="https://www.dco.uscg.mil/Portals/9/CG-5R/nsarc/DetExpReport_2004_final_s.pdf" />
