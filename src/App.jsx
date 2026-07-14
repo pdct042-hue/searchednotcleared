@@ -749,13 +749,13 @@ export default function App() {
     <div style={{fontFamily:"'Inter',system-ui,sans-serif"}} className={`${dark?"sm-dark ":""}h-screen flex flex-col bg-gray-100`}>
       <style>{DARK_CSS}</style>
       <div className="bg-amber-500 text-black px-3 py-0.5 text-center text-[11px] font-semibold shrink-0">
-        ⚠ TESTING ONLY — not validated for operational search. Found a bug? Email <a href="mailto:peter.dellavecchia@cowg.cap.gov" className="underline">peter.dellavecchia@cowg.cap.gov</a>
+        ⚠ TESTING ONLY. Not validated for operational search. Found a bug? Email <a href="mailto:peter.dellavecchia@cowg.cap.gov" className="underline">peter.dellavecchia@cowg.cap.gov</a>
       </div>
       <div className="bg-gray-800 text-white px-3 py-1.5 flex items-center justify-between text-sm shrink-0">
         <div className="flex items-center gap-2">
           <div className="w-6 h-6 bg-emerald-500 rounded flex items-center justify-center text-white">
             {wsType==="ground"
-              ? <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M6 2h3.5v8.5c0 .8.5 1.5 1.3 1.8l7 2.6c1 .4 1.7 1.3 1.7 2.4V20H6V2z"/></svg>
+              ? <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M12 1.5c3.2 0 5.2 2.8 5.2 6.2 0 2.6-1 4.9-1.6 7H8.4c-.6-2.1-1.6-4.4-1.6-7 0-3.4 2-6.2 5.2-6.2z"/><path d="M9.2 16.5h5.6c.4 1.6.3 6-2.8 6s-3.2-4.4-2.8-6z"/></svg>
               : <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg>}
           </div>
           <span className="font-bold">Search Manager</span>
